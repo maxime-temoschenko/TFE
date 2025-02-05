@@ -164,7 +164,6 @@ class MCScoreNet(nn.Module):
             build = ScoreNet
 
         self.kernel = build(features * (2 * order + 1), context, **kwargs)
-
     def forward(
         self,
         x: Tensor,  # (B, L, C, H, W)

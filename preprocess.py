@@ -5,6 +5,7 @@ import h5py
 import torch
 import torch.nn as nn
 import tqdm
+import torch.nn.functional as F
 
 from pathlib import Path
 from torch.utils.data import Dataset, DataLoader
@@ -177,7 +178,16 @@ def unnormalize_ds(norm_data: np.array, normfile_path : str = "data/norm_params.
         raise ValueError("Invalid normalization method")
     return unnorm_data
 
-
+def pad_np_array(arr : np.array, value = np.nan):
+    y_dim = 55
+    x_dim = 66
+    desired_shape = 128
+    pad_y_dim = (128 - 55) // 2
+    pad_x_dim = (128 - 66) // 2
+    padded_tensor = F.pad(input=torch.from_numpy(arr), pad=(pad_x_dim, pad_x_dim, pad_y_dim + 1, pad_y_dim), mode='constant',
+                          value=value)
+    padded_arr = padded_tensor.numpy()
+    return padded_arr
 def preprocess_xarray_to_numpy(dataset: xr.Dataset,
                                var_keeps: list[str] = ['RF', 'U10m', 'T2m'],
                                normalization_mode: str = None,
@@ -203,6 +213,9 @@ def preprocess_xarray_to_numpy(dataset: xr.Dataset,
     data_np = np.stack(data_list, axis=-1)
     data_np = np.concatenate([data_np, mask_np], axis=-1)  # Add Mask to Channels
     data_np = np.transpose(data_np, (0, 3, 1, 2))  # (T,Y,X,C) -> (T,C,Y,X)
+
+    data_np = pad_np_array(data_np)
+    mask = pad_np_array(mask, value = False)
 
     if save_mask_path is not None:
         with h5py.File(save_mask_path, 'w') as hdf5_file:
@@ -236,7 +249,7 @@ def generate(data: np.array):
     # Create File Dataset to prepare for the training from numpy array
     # -----------
     # INPUT :
-    # data : (#Trajectory,L_Trajerctory,Channels,Y,X)
+    # data : (#Trajectory,L_Trajectory,Channels,Y,X)
     # --------
     np.random.shuffle(data)  # Shuffle along the first axis
     length = data.shape[0]
