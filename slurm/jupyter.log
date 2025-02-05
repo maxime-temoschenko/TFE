@@ -1,0 +1,41 @@
+environment: line 5: __conda_exe: command not found
+[I 2025-02-03 14:27:25.830 ServerApp] Package jupyterlab took 0.0000s to import
+[I 2025-02-03 14:27:25.834 ServerApp] Package jupyter_server_fileid took 0.0037s to import
+[I 2025-02-03 14:27:25.844 ServerApp] Package jupyter_server_terminals took 0.0093s to import
+[I 2025-02-03 14:27:25.957 ServerApp] Package jupyter_server_ydoc took 0.1125s to import
+[I 2025-02-03 14:27:25.957 ServerApp] Package nbclassic took 0.0000s to import
+[W 2025-02-03 14:27:25.959 ServerApp] A `_jupyter_server_extension_points` function was not found in nbclassic. Instead, a `_jupyter_server_extension_paths` function was found and will be used for now. This function name will be deprecated in future releases of Jupyter Server.
+[I 2025-02-03 14:27:25.960 ServerApp] Package notebook_shim took 0.0000s to import
+[W 2025-02-03 14:27:25.960 ServerApp] A `_jupyter_server_extension_points` function was not found in notebook_shim. Instead, a `_jupyter_server_extension_paths` function was found and will be used for now. This function name will be deprecated in future releases of Jupyter Server.
+[I 2025-02-03 14:27:27.298 ServerApp] Package panel.io.jupyter_server_extension took 1.3374s to import
+[I 2025-02-03 14:27:27.302 ServerApp] jupyter_server_fileid | extension was successfully linked.
+[I 2025-02-03 14:27:27.305 ServerApp] jupyter_server_terminals | extension was successfully linked.
+[I 2025-02-03 14:27:27.308 ServerApp] jupyter_server_ydoc | extension was successfully linked.
+[I 2025-02-03 14:27:27.311 ServerApp] jupyterlab | extension was successfully linked.
+[W 2025-02-03 14:27:27.313 NotebookApp] 'password' has moved from NotebookApp to ServerApp. This config will be passed to ServerApp. Be sure to update your config before our next release.
+[W 2025-02-03 14:27:27.315 ServerApp] ServerApp.password config is deprecated in 2.0. Use PasswordIdentityProvider.hashed_password.
+[I 2025-02-03 14:27:27.315 ServerApp] nbclassic | extension was successfully linked.
+[I 2025-02-03 14:27:27.636 ServerApp] notebook_shim | extension was successfully linked.
+[I 2025-02-03 14:27:27.636 ServerApp] panel.io.jupyter_server_extension | extension was successfully linked.
+[W 2025-02-03 14:27:27.787 ServerApp] WARNING: The Jupyter server is listening on all IP addresses and not using encryption. This is not recommended.
+[I 2025-02-03 14:27:27.787 ServerApp] notebook_shim | extension was successfully loaded.
+[I 2025-02-03 14:27:27.787 FileIdExtension] Configured File ID manager: ArbitraryFileIdManager
+[I 2025-02-03 14:27:27.788 FileIdExtension] ArbitraryFileIdManager : Configured root dir: /home/mtemoschenko/TFE/slurm
+[I 2025-02-03 14:27:27.788 FileIdExtension] ArbitraryFileIdManager : Configured database path: /home/mtemoschenko/.local/share/jupyter/file_id_manager.db
+[I 2025-02-03 14:27:27.788 FileIdExtension] ArbitraryFileIdManager : Successfully connected to database file.
+[I 2025-02-03 14:27:27.788 FileIdExtension] ArbitraryFileIdManager : Creating File ID tables and indices with journal_mode = DELETE
+[I 2025-02-03 14:27:27.790 FileIdExtension] Attached event listeners.
+[I 2025-02-03 14:27:27.790 ServerApp] jupyter_server_fileid | extension was successfully loaded.
+[I 2025-02-03 14:27:27.791 ServerApp] jupyter_server_terminals | extension was successfully loaded.
+[I 2025-02-03 14:27:27.791 ServerApp] jupyter_server_ydoc | extension was successfully loaded.
+[I 2025-02-03 14:27:27.791 LabApp] JupyterLab extension loaded from /home/mtemoschenko/anaconda3/lib/python3.11/site-packages/jupyterlab
+[I 2025-02-03 14:27:27.791 LabApp] JupyterLab application directory is /home/mtemoschenko/anaconda3/share/jupyter/lab
+[I 2025-02-03 14:27:27.793 ServerApp] jupyterlab | extension was successfully loaded.
+[I 2025-02-03 14:27:27.799 ServerApp] nbclassic | extension was successfully loaded.
+[I 2025-02-03 14:27:27.799 ServerApp] panel.io.jupyter_server_extension | extension was successfully loaded.
+[I 2025-02-03 14:27:27.799 ServerApp] Serving notebooks from local directory: /home/mtemoschenko/TFE/slurm
+[I 2025-02-03 14:27:27.799 ServerApp] Jupyter Server 2.5.0 is running at:
+[I 2025-02-03 14:27:27.799 ServerApp] http://localhost:8888/lab
+[I 2025-02-03 14:27:27.799 ServerApp]     http://127.0.0.1:8888/lab
+[I 2025-02-03 14:27:27.799 ServerApp] Use Control-C to stop this server and shut down all kernels (twice to skip confirmation).
+slurmstepd: error: *** JOB 3204495 ON compute-11 CANCELLED AT 2025-02-03T14:40:48 ***
