@@ -214,7 +214,7 @@ def preprocess_xarray_to_numpy(dataset: xr.Dataset,
     data_np = np.concatenate([data_np, mask_np], axis=-1)  # Add Mask to Channels
     data_np = np.transpose(data_np, (0, 3, 1, 2))  # (T,Y,X,C) -> (T,C,Y,X)
 
-    data_np = pad_np_array(data_np)
+    data_np = pad_np_array(data_np, value=0.)
     mask = pad_np_array(mask, value = False)
 
     if save_mask_path is not None:
