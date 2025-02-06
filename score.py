@@ -298,7 +298,7 @@ class VPSDE(nn.Module):
     def loss(self, x: Tensor, c: Tensor = None, w: Tensor = None) -> Tensor:
         r"""Returns the denoising loss."""
 
-        t = torch.rand(x.shape[0], dtype=x.dtype, device=x.device)
+        t = torch.rand(x.shape[0], dtype=x.dtype, device=x.device) # (BATCH_SIZE)
         x, eps = self.forward(x, t, train=True)
 
         err = (self.eps(x, t, c) - eps).square()
