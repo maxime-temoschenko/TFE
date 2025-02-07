@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import tqdm
 import torch.nn.functional as F
-
+import fire
 from pathlib import Path
 from torch.utils.data import Dataset, DataLoader
 from typing import *
@@ -178,7 +178,7 @@ def unnormalize_ds(norm_data: np.array, normfile_path : str = "data/norm_params.
         raise ValueError("Invalid normalization method")
     return unnorm_data
 
-def resize_array(arr: np.array, size: int = 64, value=np.nan):
+def resize_array(arr: np.array, size: int , value=np.nan):
     # (*,y,x) -> (*, desired_shape, desired_shape) by cropping or padding with value
     *absorb, y_dim, x_dim = arr.shape
 
@@ -202,6 +202,7 @@ def resize_array(arr: np.array, size: int = 64, value=np.nan):
     return resized_arr
 def preprocess_xarray_to_numpy(dataset: xr.Dataset,
                                var_keeps: list[str] = ['RF', 'U10m', 'T2m'],
+                               size= 128,
                                normalization_mode: str = None,
                                save_mask_path: str="data/mask.h5"):
     # INPUT :
@@ -226,8 +227,8 @@ def preprocess_xarray_to_numpy(dataset: xr.Dataset,
     data_np = np.concatenate([data_np, mask_np], axis=-1)  # Add Mask to Channels
     data_np = np.transpose(data_np, (0, 3, 1, 2))  # (T,Y,X,C) -> (T,C,Y,X)
 
-    data_np = resize_array(data_np, value=0.)
-    mask = resize_array(mask, value = False)
+    data_np = resize_array(data_np,size=size, value=0.)
+    mask = resize_array(mask, size=size,value = False)
 
     if save_mask_path is not None:
         with h5py.File(save_mask_path, 'w') as hdf5_file:
@@ -280,11 +281,41 @@ def generate(data: np.array):
         PATH_DATA.mkdir(exist_ok=True)
         with h5py.File(PATH / f'data/{name}.h5', mode='w') as f:
             f.create_dataset('x', data=x, dtype=np.float32)
+    print('[GENERATE]')
     print('Files are written')
+    print('[\GENERATE]')
 
-# Preprocessing pipeline
-if __name__ == '__main__':
-    ds = load_xarray_nc_monthly()
-    np_ds, mask = preprocess_xarray_to_numpy(ds, normalization_mode='minmax_01')
-    traj_np_ds = create_trajectory(np_ds, overlapping=False)
+
+
+def main(input_folder: str = 'data/monthly_aggregated',
+         start_year: int = 1940,
+         end_year: int = 2022,
+         var_keeps: list[str] = ['RF', 'U10m', 'T2m'],
+         # preprocess
+         size=128,
+         normalization_mode: str = 'minmax_01',
+         save_mask_path: str = "data/mask.h5",
+         # Create Trajectory
+         length_trajectory: int = 32,
+         overlapping_trajectory=False
+         ):
+    print('[PREPROCESSING]')
+    print(f"monthly folder path: {input_folder}")
+    print(f"Load data from : {start_year} to {end_year}")
+    print(f"variables to keep are : {var_keeps}")
+    print(f"Last 2D of batch_size will be : {size}")
+    print(f"Normalization strategy for data: {normalization_mode}")
+    print(f"Mask save path: {save_mask_path}")
+    print(f"Length of the trajectory: {length_trajectory}")
+    print(f"Overlapping Trajectories ? :  {overlapping_trajectory}")
+
+    # Preprocessing pipeline
+    ds = load_xarray_nc_monthly(input_folder=input_folder, start_year=start_year, end_year=end_year, var_keeps=var_keeps)
+    np_ds, mask = preprocess_xarray_to_numpy(ds,var_keeps=var_keeps,size=size,normalization_mode=normalization_mode,save_mask_path=save_mask_path)
+    traj_np_ds = create_trajectory(np_ds,L=length_trajectory, overlapping=overlapping_trajectory)
     generate(traj_np_ds)
+    
+    print('[\PREPROCESSING]')
+
+if __name__ == '__main__':
+    fire.Fire(main)
