@@ -26,8 +26,17 @@ with h5py.File(PATH / "data/mask.h5", "r") as f:
 if torch.isnan(mask).any():
     raise ValueError("Mask contains NaN values!")
 
+# Load Dataset
+trainset = TrajectoryDataset(PATH / "data/train.h5", window=10, flatten=True)
+validset = TrajectoryDataset(PATH / "data/valid.h5", window=10, flatten=True)
+
+# Dimensions
+channels, y_dim, x_dim = trainset[0][0].shape #channels = (#var_keeps+1) * window
+batch_size = 5
+
+# CONFIG
 TRAIN_CONFIG = {
-    "epochs": 100,
+    "epochs": 1000,
     "batch_size": 5,
     "learning_rate": 1e-3,
     "weight_decay": 1e-3,
@@ -37,39 +46,27 @@ TRAIN_CONFIG = {
     "hidden_blocks": (3,),
     "activation": "SiLU",
 }
-
-
-'''
-Definition of Denoiser and Scheduler
-'''
-# Common dimensions
-batch_size = 5
-MAR_channels = 4 # Example ['RF', 'T2m', 'U10m', MASK]
-window = 10
-y_dim = 128
-x_dim = 128
-
-MODEL_CONFIG = { 'hidden_channels' : [32, 64, 128],  \
-'hidden_blocks' : [2, 3, 5],  \
-'spatial' : 2, \
-'channels' : window*MAR_channels, \
-'context' : 0,\
+MODEL_CONFIG = { 'hidden_channels' : [32, 64, 128],
+'hidden_blocks' : [2, 3, 5],
+'spatial' : 2,
+'channels' : channels,
+'context' : 0,
 'embedding' : 64 }
-
 CONFIG = {**TRAIN_CONFIG, **MODEL_CONFIG}
 run = wandb.init(
     project="Denoiser-Training",
     config= CONFIG)
-
+'''
+Definition of Denoiser and Scheduler
+'''
 
 # Denoiser and Scheduler
 score_unet = ScoreUNet(**MODEL_CONFIG)
-vpsde = VPSDE(score_unet, shape=(MAR_channels*window, y_dim, x_dim)).cuda()
+vpsde = VPSDE(score_unet, shape=(channels, y_dim, x_dim)).cuda()
 
-# Load Dataset
-trainset = TrajectoryDataset(PATH / "data/train.h5", window=10, flatten=True)
-validset = TrajectoryDataset(PATH / "data/valid.h5", window=10, flatten=True)
 
+
+## TRAINING LOOP
 trainloader = DataLoader(trainset, batch_size=TRAIN_CONFIG["batch_size"], shuffle=True, num_workers=1, persistent_workers=True)
 validloader = DataLoader(validset, batch_size=TRAIN_CONFIG["batch_size"], shuffle=False, num_workers=1, persistent_workers=True)
 

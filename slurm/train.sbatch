@@ -8,7 +8,7 @@
 #SBATCH --error="error_train.log"
 #SBATCH --cpus-per-task=1        # Number of CPU cores to allocate
 #SBATCH --mem-per-cpu=4000       # Memory to allocate in MB per allocated CPU core
-#SBATCH --partition=1080ti
+#SBATCH --partition=tesla
 #SBATCH --gres=gpu:2             # Number of GPU's
 #SBATCH --time="7-00:00:00"      # Max execution time
 #
@@ -19,4 +19,5 @@ source ~/anaconda3/etc/profile.d/conda.sh
 conda activate deep_learning
 
 # Start Jupyter Lab
+#python ../preprocess.py
 python ../train.py

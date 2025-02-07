@@ -290,7 +290,7 @@ def generate(data: np.array):
 def main(input_folder: str = 'data/monthly_aggregated',
          start_year: int = 1940,
          end_year: int = 2022,
-         var_keeps: list[str] = ['RF', 'U10m', 'T2m'],
+         var_keeps: list[str] = None,
          # preprocess
          size=128,
          normalization_mode: str = 'minmax_01',
@@ -299,6 +299,12 @@ def main(input_folder: str = 'data/monthly_aggregated',
          length_trajectory: int = 32,
          overlapping_trajectory=False
          ):
+    # By default keeps all variables
+    if var_keeps is None:
+        var_keeps = ["CC", "EP", "ET", "LHF", "LWD", "RF", "RH2m",
+                     "RO1", "RO2", "RO3", "RO4", "RO5", "RO6", "RU",
+                     "SF", "SHF", "SL", "SLP", "SMB", "SN", "SP", "SQC",
+                     "ST", "SWD", "SWDD", "T2m", "U10m", "U2m", "ZN"]
     print('[PREPROCESSING]')
     print(f"monthly folder path: {input_folder}")
     print(f"Load data from : {start_year} to {end_year}")
@@ -309,12 +315,15 @@ def main(input_folder: str = 'data/monthly_aggregated',
     print(f"Length of the trajectory: {length_trajectory}")
     print(f"Overlapping Trajectories ? :  {overlapping_trajectory}")
 
+
+
+
     # Preprocessing pipeline
     ds = load_xarray_nc_monthly(input_folder=input_folder, start_year=start_year, end_year=end_year, var_keeps=var_keeps)
     np_ds, mask = preprocess_xarray_to_numpy(ds,var_keeps=var_keeps,size=size,normalization_mode=normalization_mode,save_mask_path=save_mask_path)
     traj_np_ds = create_trajectory(np_ds,L=length_trajectory, overlapping=overlapping_trajectory)
     generate(traj_np_ds)
-    
+
     print('[\PREPROCESSING]')
 
 if __name__ == '__main__':
