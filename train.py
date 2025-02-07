@@ -3,7 +3,7 @@ import h5py
 import math
 import torch
 import numpy as np
-#import wandb
+import wandb
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -13,10 +13,15 @@ from utils import TrajectoryDataset
 from score import ScoreUNet, MCScoreWrapper, VPSDE
 from score import VPSDE
 
-PATH = Path('.')
+PATH = Path('..')
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
+
 
 with h5py.File(PATH / "data/mask.h5", "r") as f:
-    mask = torch.tensor(f["dataset"][:], dtype=torch.float32).unsqueeze(0)
+    mask = torch.tensor(f["dataset"][:], dtype=torch.float32, device=device).unsqueeze(0)
 
 if torch.isnan(mask).any():
     raise ValueError("Mask contains NaN values!")
@@ -32,7 +37,7 @@ TRAIN_CONFIG = {
     "hidden_blocks": (3,),
     "activation": "SiLU",
 }
-device = 'cpu'
+
 
 '''
 Definition of Denoiser and Scheduler
@@ -51,9 +56,15 @@ MODEL_CONFIG = { 'hidden_channels' : [32, 64, 128],  \
 'context' : 0,\
 'embedding' : 64 }
 
+CONFIG = {**TRAIN_CONFIG, **MODEL_CONFIG}
+run = wandb.init(
+    project="Denoiser-Training",
+    config= CONFIG)
+
+
 # Denoiser and Scheduler
 score_unet = ScoreUNet(**MODEL_CONFIG)
-vpsde = VPSDE(score_unet, shape=(MAR_channels*window, y_dim, x_dim))
+vpsde = VPSDE(score_unet, shape=(MAR_channels*window, y_dim, x_dim)).cuda()
 
 # Load Dataset
 trainset = TrajectoryDataset(PATH / "data/train.h5", window=10, flatten=True)
@@ -86,6 +97,7 @@ for epoch in (bar := trange(TRAIN_CONFIG["epochs"], ncols=88)):
     # Training
     vpsde.train()
     for i, (batch, _) in enumerate(trainloader):
+        batch = batch.to(device)
         if torch.isnan(batch).any():
             raise ValueError("batch contains NaN values!")
         batch = batch.to(device)
@@ -111,13 +123,13 @@ for epoch in (bar := trange(TRAIN_CONFIG["epochs"], ncols=88)):
             w = mask_batch.float()
 
             loss = vpsde.loss(batch, w=w)
-            losses_valid.append(loss)
+            losses_valid.append(loss.detach())
 
     loss_train = torch.stack(losses_train).mean().item()
     loss_valid = torch.stack(losses_valid).mean().item()
     print(f"Train Loss : {loss_train}, Valid Loss : {loss_valid}")
     lr = optimizer.param_groups[0]['lr']
-
+    wandb.log({"Train Loss" : loss_train, "Valid Loss" : loss_valid, "lr" : lr})
     all_losses_train.append(loss_train)
     all_losses_valid.append(loss_valid)
 
