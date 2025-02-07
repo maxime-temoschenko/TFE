@@ -178,16 +178,28 @@ def unnormalize_ds(norm_data: np.array, normfile_path : str = "data/norm_params.
         raise ValueError("Invalid normalization method")
     return unnorm_data
 
-def pad_np_array(arr : np.array, value = np.nan):
-    y_dim = 55
-    x_dim = 66
-    desired_shape = 128
-    pad_y_dim = (128 - 55) // 2
-    pad_x_dim = (128 - 66) // 2
-    padded_tensor = F.pad(input=torch.from_numpy(arr), pad=(pad_x_dim, pad_x_dim, pad_y_dim + 1, pad_y_dim), mode='constant',
-                          value=value)
-    padded_arr = padded_tensor.numpy()
-    return padded_arr
+def resize_array(arr: np.array, size: int = 64, value=np.nan):
+    # (*,y,x) -> (*, desired_shape, desired_shape) by cropping or padding with value
+    *absorb, y_dim, x_dim = arr.shape
+
+    if y_dim > size:
+        cut_y = (y_dim - size) // 2
+        arr = arr[..., cut_y: cut_y + size, :]
+    if x_dim > size:
+        cut_x = (x_dim - size) // 2
+        arr = arr[..., :, cut_x: cut_x + size]
+    *absorb, y_dim, x_dim = arr.shape
+
+    pad_top = (size - y_dim) // 2
+    pad_bottom = (size - y_dim) - pad_top
+    pad_left = (size - x_dim) // 2
+    pad_right = (size - x_dim) - pad_left
+
+    pad_list = [(0, 0)] * (arr.ndim - 2) + [(pad_top, pad_bottom), (pad_left, pad_right)]
+    resized_arr = np.pad(arr, pad_list, \
+                         mode="constant", \
+                         constant_values=value)
+    return resized_arr
 def preprocess_xarray_to_numpy(dataset: xr.Dataset,
                                var_keeps: list[str] = ['RF', 'U10m', 'T2m'],
                                normalization_mode: str = None,
@@ -214,8 +226,8 @@ def preprocess_xarray_to_numpy(dataset: xr.Dataset,
     data_np = np.concatenate([data_np, mask_np], axis=-1)  # Add Mask to Channels
     data_np = np.transpose(data_np, (0, 3, 1, 2))  # (T,Y,X,C) -> (T,C,Y,X)
 
-    data_np = pad_np_array(data_np, value=0.)
-    mask = pad_np_array(mask, value = False)
+    data_np = resize_array(data_np, value=0.)
+    mask = resize_array(mask, value = False)
 
     if save_mask_path is not None:
         with h5py.File(save_mask_path, 'w') as hdf5_file:
