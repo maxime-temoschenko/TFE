@@ -301,7 +301,7 @@ def main(input_folder: str = 'data/monthly_aggregated',
          ):
     # By default keeps all variables
     if var_keeps is None:
-        var_keeps = ["CC", "EP", "ET", "LHF", "LWD", "RF", "RH2m",
+        var_keeps = ["CC", "EP", "ET", "LHF", "LWD", "RF", "RH2m", "Q2m"
                      "RO1", "RO2", "RO3", "RO4", "RO5", "RO6", "RU",
                      "SF", "SHF", "SL", "SLP", "SMB", "SN", "SP", "SQC",
                      "ST", "SWD", "SWDD", "T2m", "U10m", "U2m", "ZN"]
