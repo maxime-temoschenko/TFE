@@ -9,6 +9,7 @@
 #SBATCH --cpus-per-task=1        # Number of CPU cores to allocate
 #SBATCH --mem-per-cpu=16g       # Memory to allocate in MB per allocated CPU core
 #SBATCH --gres=gpu:4             # Number of GPU's
+#SBATCH --partition=1080ti
 #SBATCH --time="7-00:00:00"      # Max execution time
 
 # Activate environment

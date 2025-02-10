@@ -1,7 +1,7 @@
 
 from preprocess import *
 
-ds = load_xarray_nc_monthly()
+ds = load_xarray()
 
 # Test the preprocessing
 np_ds, _ =  preprocess_xarray_to_numpy(ds)

@@ -1,4 +1,6 @@
 import os
+
+import xarray
 import xarray as xr
 import numpy as np
 import h5py
@@ -64,18 +66,26 @@ def reduction_dataset(dataset, var_keep):
 
 
 # Convert inf values (unobserved values) to nan
-def inf_to_nan(ds, variables):
+def inf_to_nan(ds : xarray.Dataset, variables : list[str]):
     for var in variables:
         ds[var] = ds[var].where(~np.isinf(ds[var]), np.nan)
+    return ds
+# Conver _fillVall (unobserved values) to nan
+def fillVal_to_nan(ds : xarray.Dataset, variables : list[str]):
+    # Replace the fill value (e.g., 9.9692100e+36) with NaN
+    for var in variables:
+        fill_value = ds[var].attrs.get("_FillValue", 9.96921e36)  # Default if not explicitly set
+        ds[var] = ds[var].where(ds[var] != fill_value, np.nan)  # Replace fill values with NaN
     return ds
 
 
 # Returns xarray Dataset from monthly *.nc files, unobserved values are np.NaN from files between start_year and end_year
-def load_xarray_nc_monthly(
-        input_folder: str = 'data/monthly_aggregated',
+def load_xarray(
+        input_folder: str = 'data/',
         start_year: int = 1940,
         end_year: int = 2022,
-        var_keeps: list[str] = ['DD', 'DIST', 'HH', 'LAT', 'LON', 'MIN', 'MM', 'RF', 'U10m', 'T2m', 'YYYY']
+        var_keeps: list[str] = ['DD', 'DIST', 'HH', 'LAT', 'LON', 'MIN', 'MM', 'RF', 'U10m', 'T2m', 'YYYY'],
+        process_undefined : Callable[[xarray.Dataset, list[str]], xarray.Dataset] = fillVal_to_nan
 ):
     Folder = Path(input_folder)
     assert Folder.exists()
@@ -83,17 +93,23 @@ def load_xarray_nc_monthly(
     files = list(Folder.glob("*.nc"))
     assert 1940 <= start_year <= end_year <= 2022
     filtered_files = filter_by_year(files, start_year, end_year)
+    print("[LOAD XARRAY]")
+    print(f"Filtered file : {filtered_files}")
     # Combine the different datasets
-    datasets = [reduction_dataset(xr.open_dataset(file), var_keeps) for file in files]
-    combined_ds = inf_to_nan(xr.concat(datasets, dim="time").sortby("time"), var_keeps)
-
+    print(f"Combination Dataset")
+    datasets = [reduction_dataset(xr.open_dataset(file), var_keeps) for file in filtered_files]
+    print(f"Preprocess Undefined regions")
+    combined_ds = process_undefined(xr.concat(datasets, dim="time").sortby("time"), var_keeps)
+    print("[\LOAD XARRAY]")
     return combined_ds
 
 
 # largely inspired from https://github.com/schmidtjonathan/Climate2Weather/blob/main/data/pipeline.py
-def normalize_ds(var_data: np.array, normalization_mode: str = None, h5file_path: str = 'data/norm_params.h5'):
+def normalize_ds(var_data: np.array, var : str, normalization_mode: str = None, h5file_path: str = 'data/norm_params.h5'  ):
     if h5file_path is None:
         raise ValueError("h5file_path must be specified")
+
+    assert not (np.isinf(var_data).any()), f"{var} numpy array contains inf values !"
 
     if normalization_mode is None:
         var_data = var_data
@@ -112,6 +128,7 @@ def normalize_ds(var_data: np.array, normalization_mode: str = None, h5file_path
         mean = np.nanmean(var_data)
         std = np.nanstd(var_data)
         var_data = (var_data - mean) / std
+        print(f"VAR : {var}, mean : {mean}, std : {std}")
         norm_dic = {'mean' : mean, 'std' : std}
     elif normalization_mode == 'robust':
         median = np.nanmedian(var_data)
@@ -131,22 +148,30 @@ def normalize_ds(var_data: np.array, normalization_mode: str = None, h5file_path
     else:
         raise ValueError("Invalid normalization method")
 
-    with h5py.File(h5file_path, 'w') as norm_file:
-        for label, value in norm_dic.items():
-            norm_file.create_dataset(label, data=value)
+    with h5py.File(h5file_path, 'a') as norm_file: # Organization  : /{var}/{label}
+        if var not in norm_file:
+            var_group = norm_file.create_group(var)
+        else:
+            var_group = norm_file[var]
 
+        for label, value in norm_dic.items():
+            if label in var_group:
+                del var_group[label]
+            var_group.create_dataset(label, data=value)
     return var_data
 
 
 # largely inspired from https://github.com/schmidtjonathan/Climate2Weather/blob/main/data/pipeline.py
-def unnormalize_ds(norm_data: np.array, normfile_path : str = "data/norm_params.h5", normalization_mode: str = None):
+def unnormalize_ds(norm_data: np.array, var : str, normfile_path : str = "data/norm_params.h5", normalization_mode: str = None):
     if normfile_path is None:
         raise ValueError('Undefined normfile_path')
 
 
-
     with h5py.File(normfile_path, 'r') as norm_file:
-        norm_dic = {key: norm_file[key][()] for key in norm_file.keys()}
+        if var not in norm_file:
+            raise KeyError(f"The variable hasn't been found in the file : Check normalization")
+        var_group = norm_file[var]
+        norm_dic = {key: var_group[key][()] for key in var_group.keys()}
 
     if normalization_mode is None:
         unnorm_data = norm_data
@@ -200,31 +225,31 @@ def resize_array(arr: np.array, size: int , value=np.nan):
                          mode="constant", \
                          constant_values=value)
     return resized_arr
+
+# TODO : Return Time information
 def preprocess_xarray_to_numpy(dataset: xr.Dataset,
                                var_keeps: list[str] = ['RF', 'U10m', 'T2m'],
-                               size= 128,
+                               size= 64,
                                normalization_mode: str = None,
+                               save_norm_path: str='data/norm_params.h5',
                                save_mask_path: str="data/mask.h5"):
     # INPUT :
     # dataset : xarray.Dataset with Coordinates (time, x, y) and variables with NaN for undefined regions
     # var_keeps : Variable to keep from the
     # ------
-    # Returns Numpy Array -> (Time, Y, X, Channel) where Channel = ([var_keeps], MASK)
-    # Mask specifies which values are undetemined, encoded as False meanwhile for other var, NaN are encoded as 0
+    # Returns Numpy Array -> (Time, Y, X, Channel), Channel = var_keeps
+    # Mask specifies which values are undetemined, encoded as False
     data_list = []
     ds = reduction_dataset(dataset, var_keeps)
     # Mask
-    mask = ~np.isnan(ds[var_keeps[0]].isel(time=0).values)
-    mask_np = np.tile(mask, (ds.sizes['time'], 1, 1))
-    mask_np = np.expand_dims(mask_np, axis=-1)
+    mask = ~np.isnan(ds[var_keeps[0]].isel(time=0).values) # Constant mask over time
     # Process each variable
     for var in var_keeps:
         var_data = ds[var].values
-        var_data = normalize_ds(var_data, normalization_mode)
+        var_data = normalize_ds(var_data,var, normalization_mode,h5file_path=save_norm_path)
         var_data = np.nan_to_num(var_data, nan=0.0)
         data_list.append(var_data)
     data_np = np.stack(data_list, axis=-1)
-    data_np = np.concatenate([data_np, mask_np], axis=-1)  # Add Mask to Channels
     data_np = np.transpose(data_np, (0, 3, 1, 2))  # (T,Y,X,C) -> (T,C,Y,X)
 
     data_np = resize_array(data_np,size=size, value=0.)
@@ -236,7 +261,7 @@ def preprocess_xarray_to_numpy(dataset: xr.Dataset,
 
     return data_np, mask
 
-
+# TODO : Potentially remove
 def create_trajectory(data: np.array, L: int = 32, overlapping=True):
     # Create overlapping time trajectories from (T, C, Y, X) array
     # L is the length of the trajectory
@@ -256,7 +281,7 @@ def create_trajectory(data: np.array, L: int = 32, overlapping=True):
             trajectory_data[i] = data[i * L: (i + 1) * L]
     return trajectory_data
 
-
+# TODO : Potentially remove
 # Largely inspired from : https://github.com/francois-rozet/sda/blob/qg/experiments/kolmogorov/generate.py#L31
 def generate(data: np.array):
     # Create File Dataset to prepare for the training from numpy array
@@ -287,17 +312,16 @@ def generate(data: np.array):
 
 
 
-def main(input_folder: str = 'data/monthly_aggregated',
-         start_year: int = 1940,
-         end_year: int = 2022,
-         var_keeps: list[str] = None,
+
+def main(input_folder: str = 'data/',
+         start_year_train: int = 2021,
+         end_year_train: int = 2021,
+         year_test : int = 2022,
+         var_keeps: list[str] = ['T2m', 'U10m'],
          # preprocess
-         size=128,
-         normalization_mode: str = 'minmax_01',
+         size=64,
+         normalization_mode: str = 'zscore',
          save_mask_path: str = "data/mask.h5",
-         # Create Trajectory
-         length_trajectory: int = 32,
-         overlapping_trajectory=False
          ):
     # By default keeps all variables
     if var_keeps is None:
@@ -306,23 +330,42 @@ def main(input_folder: str = 'data/monthly_aggregated',
                      "SF", "SHF", "SL", "SLP", "SMB", "SN", "SP", "SQC",
                      "ST", "SWD", "SWDD", "T2m", "U10m", "U2m", "ZN"]
     print('[PREPROCESSING]')
-    print(f"monthly folder path: {input_folder}")
-    print(f"Load data from : {start_year} to {end_year}")
+    print(f"Folder Path: {input_folder}")
+    print(f"Training : {start_year_train} to {end_year_train}")
+    print(f"Test : {year_test}")
     print(f"variables to keep are : {var_keeps}")
     print(f"Last 2D of batch_size will be : {size}")
     print(f"Normalization strategy for data: {normalization_mode}")
     print(f"Mask save path: {save_mask_path}")
-    print(f"Length of the trajectory: {length_trajectory}")
-    print(f"Overlapping Trajectories ? :  {overlapping_trajectory}")
-
-
 
 
     # Preprocessing pipeline
-    ds = load_xarray_nc_monthly(input_folder=input_folder, start_year=start_year, end_year=end_year, var_keeps=var_keeps)
-    np_ds, mask = preprocess_xarray_to_numpy(ds,var_keeps=var_keeps,size=size,normalization_mode=normalization_mode,save_mask_path=save_mask_path)
-    traj_np_ds = create_trajectory(np_ds,L=length_trajectory, overlapping=overlapping_trajectory)
-    generate(traj_np_ds)
+    print('[TRAIN PREPROCESSING]')
+    # Train
+    train_ds = load_xarray(input_folder=input_folder, start_year=start_year_train, end_year=end_year_train, var_keeps=var_keeps)
+    #assert (np.isinf(train_ds['T2m'].to_numpy()).any()), f"Still inf values !"
+    train_np_ds, mask = preprocess_xarray_to_numpy(train_ds,var_keeps=var_keeps,size=size,normalization_mode=normalization_mode,save_mask_path=save_mask_path)
+    print('[\TRAIN PREPROCESSING]')
+    # Test
+    print('[TEST PREPROCESSING')
+    test_ds = load_xarray(input_folder=input_folder, start_year=year_test, end_year=year_test, var_keeps=var_keeps)
+    test_np_ds, _  = preprocess_xarray_to_numpy(test_ds, var_keeps=var_keeps, size=size,
+                                                normalization_mode=normalization_mode,save_norm_path='data/test_norm_params.h5', save_mask_path=save_mask_path )
+    print('[\TEST PREPROCESSING]')
+
+
+    # Save the files and make it compatible with Trajectory Dataset
+    dataset = {'train':train_np_ds, 'test':test_np_ds}
+    print('[GENERATE]')
+    PATH = Path('.')
+    for name, x in dataset.items():
+        PATH_DATA = PATH / 'data'
+        PATH_DATA.mkdir(exist_ok=True)
+        with h5py.File(PATH / f'data/{name}.h5', mode='w') as f:
+            f.create_dataset('x', data=x, dtype=np.float32)
+        print(f"Write to {PATH / f'data/{name}.h5'}")
+    print('[\GENERATE]')
+
 
     print('[\PREPROCESSING]')
 

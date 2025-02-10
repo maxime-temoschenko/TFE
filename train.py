@@ -9,7 +9,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import trange
 from pathlib import Path
-from utils import TrajectoryDataset
+from utils import SequenceDataset
 from score import ScoreUNet, MCScoreWrapper, VPSDE
 from score import VPSDE
 
@@ -27,8 +27,8 @@ if torch.isnan(mask).any():
     raise ValueError("Mask contains NaN values!")
 
 # Load Dataset
-trainset = TrajectoryDataset(PATH / "data/train.h5", window=10, flatten=True)
-validset = TrajectoryDataset(PATH / "data/valid.h5", window=10, flatten=True)
+trainset = SequenceDataset(PATH / "data/train.h5", window=12, flatten=True)
+validset = SequenceDataset(PATH / "data/test.h5", window=12, flatten=True)
 
 # Dimensions
 channels, y_dim, x_dim = trainset[0][0].shape #channels = (#var_keeps+1) * window
