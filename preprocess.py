@@ -226,7 +226,7 @@ def resize_array(arr: np.array, size: int , value=np.nan):
                          constant_values=value)
     return resized_arr
 
-# TODO : Return Time information
+
 def preprocess_xarray_to_numpy(dataset: xr.Dataset,
                                var_keeps: list[str] = ['RF', 'U10m', 'T2m'],
                                size= 64,
@@ -243,6 +243,8 @@ def preprocess_xarray_to_numpy(dataset: xr.Dataset,
     ds = reduction_dataset(dataset, var_keeps)
     # Mask
     mask = ~np.isnan(ds[var_keeps[0]].isel(time=0).values) # Constant mask over time
+    # Date Information
+    time_data = ds['time'].values
     # Process each variable
     for var in var_keeps:
         var_data = ds[var].values
@@ -259,7 +261,7 @@ def preprocess_xarray_to_numpy(dataset: xr.Dataset,
         with h5py.File(save_mask_path, 'w') as hdf5_file:
             hdf5_file.create_dataset('dataset', data=mask)
 
-    return data_np, mask
+    return data_np, mask, time_data
 
 # TODO : Potentially remove
 def create_trajectory(data: np.array, L: int = 32, overlapping=True):
@@ -344,25 +346,29 @@ def main(input_folder: str = 'data/',
     # Train
     train_ds = load_xarray(input_folder=input_folder, start_year=start_year_train, end_year=end_year_train, var_keeps=var_keeps)
     #assert (np.isinf(train_ds['T2m'].to_numpy()).any()), f"Still inf values !"
-    train_np_ds, mask = preprocess_xarray_to_numpy(train_ds,var_keeps=var_keeps,size=size,normalization_mode=normalization_mode,save_mask_path=save_mask_path)
+    train_np_ds, mask, train_time_date = preprocess_xarray_to_numpy(train_ds,var_keeps=var_keeps,size=size,normalization_mode=normalization_mode,save_mask_path=save_mask_path)
     print('[\TRAIN PREPROCESSING]')
     # Test
     print('[TEST PREPROCESSING')
     test_ds = load_xarray(input_folder=input_folder, start_year=year_test, end_year=year_test, var_keeps=var_keeps)
-    test_np_ds, _  = preprocess_xarray_to_numpy(test_ds, var_keeps=var_keeps, size=size,
+    test_np_ds, _, test_time_date  = preprocess_xarray_to_numpy(test_ds, var_keeps=var_keeps, size=size,
                                                 normalization_mode=normalization_mode,save_norm_path='data/test_norm_params.h5', save_mask_path=save_mask_path )
     print('[\TEST PREPROCESSING]')
 
 
     # Save the files and make it compatible with Trajectory Dataset
-    dataset = {'train':train_np_ds, 'test':test_np_ds}
+    dataset = {'train': {'data': train_np_ds, 'date' : train_time_date},
+               'test': {'data' : test_np_ds, 'date' : test_time_date}}
     print('[GENERATE]')
+    print(type(train_time_date[0]))
+    print(train_time_date[0])
     PATH = Path('.')
     for name, x in dataset.items():
         PATH_DATA = PATH / 'data'
         PATH_DATA.mkdir(exist_ok=True)
         with h5py.File(PATH / f'data/{name}.h5', mode='w') as f:
-            f.create_dataset('x', data=x, dtype=np.float32)
+            f.create_dataset('data', data=x['data'], dtype=np.float32)
+            f.create_dataset('date', data=x['date'].astype('S'), dtype=h5py.special_dtype(vlen=str))
         print(f"Write to {PATH / f'data/{name}.h5'}")
     print('[\GENERATE]')
 

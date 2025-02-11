@@ -18,7 +18,7 @@ PATH = Path('..')
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-
+window=12
 
 with h5py.File(PATH / "data/mask.h5", "r") as f:
     mask = torch.tensor(f["dataset"][:], dtype=torch.float32, device=device).unsqueeze(0)
@@ -27,8 +27,8 @@ if torch.isnan(mask).any():
     raise ValueError("Mask contains NaN values!")
 
 # Load Dataset
-trainset = SequenceDataset(PATH / "data/train.h5", window=12, flatten=True)
-validset = SequenceDataset(PATH / "data/test.h5", window=12, flatten=True)
+trainset = SequenceDataset(PATH / "data/train.h5", window=window, flatten=True)
+validset = SequenceDataset(PATH / "data/test.h5", window=window, flatten=True)
 
 # Dimensions
 channels, y_dim, x_dim = trainset[0][0].shape #channels = (#var_keeps+1) * window
@@ -36,21 +36,21 @@ batch_size = 5
 
 # CONFIG
 TRAIN_CONFIG = {
-    "epochs": 1000,
-    "batch_size": 5,
+    "epochs": 1024,
+    "batch_size": 50,
     "learning_rate": 1e-3,
     "weight_decay": 1e-3,
     "scheduler": "linear",
-    "embedding": 32,
-    "hidden_channels": (64,),
-    "hidden_blocks": (3,),
+    "embedding": 64,
+    "hidden_channels": (16,32,64),
+    "hidden_blocks": (3,3,3),
     "activation": "SiLU",
 }
-MODEL_CONFIG = { 'hidden_channels' : [32, 64, 128],
-'hidden_blocks' : [2, 3, 5],
+MODEL_CONFIG = { 'hidden_channels' : [16,32,64],
+'hidden_blocks' : [3, 3, 3],
 'spatial' : 2,
 'channels' : channels,
-'context' : 0,
+'context' : 4*window+4,
 'embedding' : 64 }
 CONFIG = {**TRAIN_CONFIG, **MODEL_CONFIG}
 run = wandb.init(
@@ -85,6 +85,9 @@ else:
 
 scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
+checkpoint_dir = "checkpoints"
+os.makedirs(checkpoint_dir, exist_ok=True)
+
 all_losses_train = []
 all_losses_valid = []
 for epoch in (bar := trange(TRAIN_CONFIG["epochs"], ncols=88)):
@@ -93,8 +96,9 @@ for epoch in (bar := trange(TRAIN_CONFIG["epochs"], ncols=88)):
 
     # Training
     vpsde.train()
-    for i, (batch, _) in enumerate(trainloader):
+    for i, (batch, dic) in enumerate(trainloader):
         batch = batch.to(device)
+        c = dic['context'].to(device)
         if torch.isnan(batch).any():
             raise ValueError("batch contains NaN values!")
         batch = batch.to(device)
@@ -105,7 +109,7 @@ for epoch in (bar := trange(TRAIN_CONFIG["epochs"], ncols=88)):
         w = mask_batch.float()
 
 
-        loss = vpsde.loss(batch, w=w)
+        loss = vpsde.loss(batch,c=c, w=w)
         loss.backward()
         optimizer.step()
 
@@ -114,12 +118,13 @@ for epoch in (bar := trange(TRAIN_CONFIG["epochs"], ncols=88)):
     # Evaluation
     vpsde.eval()
     with torch.no_grad():
-        for batch, _ in validloader:
+        for batch, dic in validloader:
             batch = batch.to(device)
+            c = dic['context'].to(device)
             mask_batch = mask.to(device).expand_as(batch)
             w = mask_batch.float()
 
-            loss = vpsde.loss(batch, w=w)
+            loss = vpsde.loss(batch, w=w, c=c)
             losses_valid.append(loss.detach())
 
     loss_train = torch.stack(losses_train).mean().item()
@@ -130,4 +135,15 @@ for epoch in (bar := trange(TRAIN_CONFIG["epochs"], ncols=88)):
     all_losses_train.append(loss_train)
     all_losses_valid.append(loss_valid)
 
+    #Save model sometimes
+    if epoch % 10 == 0  :
+        checkpoint_path = os.path.join(checkpoint_dir, f"model_epoch_{epoch}.pth")
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': vpsde.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss_train': loss_train,
+            'loss_valid': loss_valid,
+        }, checkpoint_path)
+        print(f"Model saved at {checkpoint_path}")
     scheduler.step()
