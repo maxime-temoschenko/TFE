@@ -9,7 +9,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import trange
 from pathlib import Path
-from utils import SequenceDataset
+from utils import SequenceDataset, plot_sample
 from score import ScoreUNet, MCScoreWrapper, VPSDE
 from score import VPSDE
 
@@ -22,6 +22,7 @@ window=12
 
 with h5py.File(PATH / "data/mask.h5", "r") as f:
     mask = torch.tensor(f["dataset"][:], dtype=torch.float32, device=device).unsqueeze(0)
+    mask_cpu = mask.detach().clone().cpu()
 
 if torch.isnan(mask).any():
     raise ValueError("Mask contains NaN values!")
@@ -32,22 +33,22 @@ validset = SequenceDataset(PATH / "data/test.h5", window=window, flatten=True)
 
 # Dimensions
 channels, y_dim, x_dim = trainset[0][0].shape #channels = (#var_keeps+1) * window
-batch_size = 5
+batch_size = 50
 
 # CONFIG
 TRAIN_CONFIG = {
-    "epochs": 1024,
+    "epochs": 1000,
     "batch_size": 50,
     "learning_rate": 1e-3,
     "weight_decay": 1e-3,
     "scheduler": "linear",
-    "embedding": 64,
-    "hidden_channels": (16,32,64),
-    "hidden_blocks": (3,3,3),
+    "embedding": 32,
+    "hidden_channels": (64,),
+    "hidden_blocks": (3,),
     "activation": "SiLU",
 }
-MODEL_CONFIG = { 'hidden_channels' : [16,32,64],
-'hidden_blocks' : [3, 3, 3],
+MODEL_CONFIG = { 'hidden_channels' : [32,64,128],
+'hidden_blocks' : [2,3,5],
 'spatial' : 2,
 'channels' : channels,
 'context' : 4*window+4,
@@ -85,7 +86,7 @@ else:
 
 scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
-checkpoint_dir = "checkpoints"
+checkpoint_dir = "checkpoints/first_config_naive_context_T2m_U10m"
 os.makedirs(checkpoint_dir, exist_ok=True)
 
 all_losses_train = []
@@ -109,7 +110,7 @@ for epoch in (bar := trange(TRAIN_CONFIG["epochs"], ncols=88)):
         w = mask_batch.float()
 
 
-        loss = vpsde.loss(batch,c=c, w=w)
+        loss = vpsde.loss(batch, w=w, c=c)
         loss.backward()
         optimizer.step()
 
@@ -137,7 +138,7 @@ for epoch in (bar := trange(TRAIN_CONFIG["epochs"], ncols=88)):
 
     #Save model sometimes
     if epoch % 10 == 0  :
-        checkpoint_path = os.path.join(checkpoint_dir, f"model_epoch_{epoch}.pth")
+        checkpoint_path = os.path.join(checkpoint_dir, f"naive_context_T2m_U10m_epoch_{epoch}.pth")
         torch.save({
             'epoch': epoch,
             'model_state_dict': vpsde.state_dict(),
@@ -146,4 +147,16 @@ for epoch in (bar := trange(TRAIN_CONFIG["epochs"], ncols=88)):
             'loss_valid': loss_valid,
         }, checkpoint_path)
         print(f"Model saved at {checkpoint_path}")
+        # Log some plots
+        with torch.no_grad():
+            myLoader = DataLoader(trainset, batch_size=10, shuffle=True, num_workers=1,
+                                    persistent_workers=True)
+            _, dic = next(iter(myLoader))
+            c = dic['context']
+            c = c.to(device)
+            sampled_traj = vpsde.sample(c=c,shape=(10,), steps=100).detach().cpu()
+        info = {'var_index': ['T2m', 'U10m'], 'channels': 2, 'window': 12}
+        path_unnorm = PATH / "data/norm_params.h5"
+        fig = plot_sample(sampled_traj, info, mask_cpu, path_unnorm, 5, step=3)
+        wandb.log({'chart': wandb.Image(fig)})
     scheduler.step()
