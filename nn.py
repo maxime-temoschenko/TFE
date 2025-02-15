@@ -4,6 +4,7 @@ r"""Neural networks"""
 
 import torch
 import torch.nn as nn
+import math
 
 from torch import Tensor
 from typing import *
@@ -99,7 +100,64 @@ class ResMLP(nn.Sequential):
         self.out_features = out_features
 
 
-class UNet(nn.Module):
+class AttentionBlock(torch.nn.Module):
+    """
+    An attention block that allows spatial positions to attend to each other.
+
+    Originally ported from here, but adapted to the N-d case.
+    https://github.com/hojonathanho/diffusion/blob/1e0dceb3b3495bbe19116a5e1b3596cd0706c543/diffusion_tf/models/unet.py#L66.
+    """
+
+    def __init__(self, channels, num_heads=1, spatial=2):
+        super().__init__()
+        self.channels = channels
+        self.num_heads = num_heads
+
+        self.norm = LayerNorm(1)
+        self.qkv = torch.nn.Conv1d(channels, channels * 3, kernel_size=1)
+        self.attention = QKVAttention()
+        self.proj_out = torch.nn.Conv1d(channels, channels, kernel_size=1)
+
+    def forward(self, x, emb):
+        b, c, *spatial = x.shape
+        # print("x", x.shape, torch.isnan(x).any())
+        x = x.reshape(b, c, -1)
+        qkv = self.qkv(self.norm(x))
+        # print("qkv", qkv.shape, torch.isnan(qkv).any())
+        qkv = qkv.reshape(b * self.num_heads, -1, qkv.shape[2])
+        h = self.attention(qkv)
+        h = h.reshape(b, -1, h.shape[-1])
+        h = self.proj_out(h)
+        return (x + h).reshape(b, c, *spatial)
+
+
+class QKVAttention(torch.nn.Module):
+    """
+    A module which performs QKV attention.
+    """
+
+    def forward(self, qkv):
+        """
+        Apply QKV attention.
+
+        :param qkv: an [N x (C * 3) x T] tensor of Qs, Ks, and Vs.
+        :return: an [N x C x T] tensor after attention.
+        """
+        ch = qkv.shape[1] // 3
+        q, k, v = torch.split(qkv, ch, dim=1)
+        scale = 1 / math.sqrt(math.sqrt(ch))
+        # print("qkv", qkv.shape, torch.isnan(qkv).any())
+        # print("scale", scale)
+        weight = torch.einsum(
+            "bct,bcs->bts", q * scale, k * scale
+        )  # More stable with f16 than dividing afterwards
+        # print("weight", weight.shape, torch.isnan(weight).any())
+        weight = torch.softmax(weight.float(), dim=-1).type(weight.dtype)
+        # print("softmax(weight)", weight.shape, torch.isnan(weight).any())
+        return torch.einsum("bts,bcs->bct", weight, v)
+
+
+class UNet(torch.nn.Module):
     r"""Creates a U-Net with modulation.
 
     References:
@@ -116,7 +174,7 @@ class UNet(nn.Module):
         stride: The stride of the downsampling convolutions.
         activation: The activation function constructor.
         spatial: The number of spatial dimensions. Can be either 1, 2 or 3.
-        kwargs: Keyword arguments passed to :class:`nn.Conv2d`.
+        kwargs: Keyword arguments passed to :class:`torch.nn.Conv2d`.
     """
 
     def __init__(
@@ -126,9 +184,10 @@ class UNet(nn.Module):
         mod_features: int,
         hidden_channels: Sequence[int] = (32, 64, 128),
         hidden_blocks: Sequence[int] = (2, 3, 5),
+        attention_levels: Sequence[int] = [],
         kernel_size: Union[int, Sequence[int]] = 3,
         stride: Union[int, Sequence[int]] = 2,
-        activation: Callable[[], nn.Module] = nn.ReLU,
+        activation: Callable[[], torch.nn.Module] = torch.nn.ReLU,
         spatial: int = 2,
         **kwargs,
     ):
@@ -140,9 +199,9 @@ class UNet(nn.Module):
 
         # Components
         convolution = {
-            1: nn.Conv1d,
-            2: nn.Conv2d,
-            3: nn.Conv3d,
+            1: torch.nn.Conv1d,
+            2: torch.nn.Conv2d,
+            3: torch.nn.Conv3d,
         }.get(spatial)
 
         if type(kernel_size) is int:
@@ -156,18 +215,20 @@ class UNet(nn.Module):
             padding=[k // 2 for k in kernel_size],
         )
 
-        block = lambda channels: ModResidualBlock(
-            project=nn.Sequential(
-                nn.Linear(mod_features, channels),
-                nn.Unflatten(-1, (-1,) + (1,) * spatial),
-            ),
-            residue=nn.Sequential(
-                LayerNorm(-(spatial + 1)),
-                convolution(channels, channels, **kwargs),
-                activation(),
-                convolution(channels, channels, **kwargs),
-            ),
-        )
+        def block(channels):
+            return ModResidualBlock(
+                project=torch.nn.Sequential(
+                    torch.nn.Linear(mod_features, channels),
+                    torch.nn.Unflatten(-1, (-1,) + (1,) * spatial),
+                ),
+                residue=torch.nn.Sequential(
+                    # torch.nn.GroupNorm(num_groups=32, num_channels=channels),
+                    LayerNorm(-(spatial + 1)),
+                    convolution(channels, channels, **kwargs),
+                    activation(),
+                    convolution(channels, channels, **kwargs),
+                ),
+            )
 
         # Layers
         heads, tails = [], []
@@ -176,7 +237,7 @@ class UNet(nn.Module):
         for i, blocks in enumerate(hidden_blocks):
             if i > 0:
                 heads.append(
-                    nn.Sequential(
+                    torch.nn.Sequential(
                         convolution(
                             hidden_channels[i - 1],
                             hidden_channels[i],
@@ -187,9 +248,12 @@ class UNet(nn.Module):
                 )
 
                 tails.append(
-                    nn.Sequential(
+                    torch.nn.Sequential(
+                        # torch.nn.GroupNorm(
+                        #     num_groups=32, num_channels=hidden_channels[i]
+                        # ),
                         LayerNorm(-(spatial + 1)),
-                        nn.Upsample(scale_factor=tuple(stride), mode='nearest'),
+                        torch.nn.Upsample(scale_factor=tuple(stride), mode="nearest"),
                         convolution(
                             hidden_channels[i],
                             hidden_channels[i - 1],
@@ -201,13 +265,29 @@ class UNet(nn.Module):
                 heads.append(convolution(in_channels, hidden_channels[i], **kwargs))
                 tails.append(convolution(hidden_channels[i], out_channels, **kwargs))
 
-            descent.append(nn.ModuleList(block(hidden_channels[i]) for _ in range(blocks)))
-            ascent.append(nn.ModuleList(block(hidden_channels[i]) for _ in range(blocks)))
+            descent_layers = []
+            ascent_layers = []
+            for bi in range(blocks):
+                descent_layers.append(block(hidden_channels[i]))
+                ascent_layers.append(block(hidden_channels[i]))
+                if i in attention_levels:
+                    descent_layers.append(AttentionBlock(hidden_channels[i]))
+                    ascent_layers.append(AttentionBlock(hidden_channels[i]))
 
-        self.heads = nn.ModuleList(heads)
-        self.tails = nn.ModuleList(reversed(tails))
-        self.descent = nn.ModuleList(descent)
-        self.ascent = nn.ModuleList(reversed(ascent))
+            descent.append(torch.nn.ModuleList(descent_layers))
+            ascent.append(torch.nn.ModuleList(ascent_layers))
+
+            # descent.append(
+            #     torch.nn.ModuleList(block(hidden_channels[i]) for _ in range(blocks))
+            # )
+            # ascent.append(
+            #     torch.nn.ModuleList(block(hidden_channels[i]) for _ in range(blocks))
+            # )
+
+        self.heads = torch.nn.ModuleList(heads)
+        self.tails = torch.nn.ModuleList(reversed(tails))
+        self.descent = torch.nn.ModuleList(descent)
+        self.ascent = torch.nn.ModuleList(reversed(ascent))
 
     def forward(self, x: Tensor, y: Tensor) -> Tensor:
         memory = []

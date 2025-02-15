@@ -55,12 +55,12 @@ class TimeEmbedding(nn.Sequential):
 
     def __init__(self, features: int):
         super().__init__(
-            nn.Linear(32, 256),
+            nn.Linear(64, 256),
             nn.SiLU(),
             nn.Linear(256, features),
         )
 
-        self.register_buffer('freqs', torch.pi * torch.arange(1, 16 + 1))
+        self.register_buffer('freqs', torch.pi * torch.arange(1, 32 + 1))
 
     def forward(self, t: Tensor) -> Tensor:
         t = self.freqs * t.unsqueeze(dim=-1)
@@ -254,6 +254,13 @@ class VPSDE(nn.Module):
             return x, eps
         else:
             return x
+    def denoise(self, x_t : Tensor, t: Tensor, c:Tensor = None) -> Tensor:
+        with torch.no_grad():
+            t = t.reshape(t.shape + (1,)*len(self.shape))
+            noise = self.eps(x_t,t,c)
+            x_0 = (x_t - self.sigma(t) * noise)/self.mu(t)
+
+            return x_0
 
     def sample(
         self,

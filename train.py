@@ -33,26 +33,25 @@ validset = SequenceDataset(PATH / "data/test.h5", window=window, flatten=True)
 
 # Dimensions
 channels, y_dim, x_dim = trainset[0][0].shape #channels = (#var_keeps+1) * window
-batch_size = 50
 
 # CONFIG
 TRAIN_CONFIG = {
-    "epochs": 1000,
-    "batch_size": 50,
-    "learning_rate": 1e-3,
-    "weight_decay": 1e-3,
+    "epochs": 10000,
+    "batch_size": 16,
+    "learning_rate": 1e-4,
+    "weight_decay": 1e-5,
     "scheduler": "linear",
-    "embedding": 32,
-    "hidden_channels": (64,),
-    "hidden_blocks": (3,),
+    "embedding": 128,
     "activation": "SiLU",
+    "eta": 1e-6,
 }
-MODEL_CONFIG = { 'hidden_channels' : [32,64,128],
-'hidden_blocks' : [2,3,5],
+MODEL_CONFIG = { 'hidden_channels' : [128, 256,512,512],
+'attention_levels' : [1,2,3,4],
+'hidden_blocks' : [3,3,3,3],
 'spatial' : 2,
 'channels' : channels,
-'context' : 4*window+4,
-'embedding' : 64 }
+'context' : 4,
+'embedding' : 128 }
 CONFIG = {**TRAIN_CONFIG, **MODEL_CONFIG}
 run = wandb.init(
     project="Denoiser-Training",
@@ -63,7 +62,7 @@ Definition of Denoiser and Scheduler
 
 # Denoiser and Scheduler
 score_unet = ScoreUNet(**MODEL_CONFIG)
-vpsde = VPSDE(score_unet, shape=(channels, y_dim, x_dim)).cuda()
+vpsde = VPSDE(score_unet, shape=(channels, y_dim, x_dim), eta=TRAIN_CONFIG['eta']).cuda()
 
 
 
@@ -86,7 +85,7 @@ else:
 
 scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
-checkpoint_dir = "checkpoints/first_config_naive_context_T2m_U10m"
+checkpoint_dir = "checkpoints/attention_config_spatial_T2m_U10m_2005_2015"
 os.makedirs(checkpoint_dir, exist_ok=True)
 
 all_losses_train = []
@@ -138,7 +137,7 @@ for epoch in (bar := trange(TRAIN_CONFIG["epochs"], ncols=88)):
 
     #Save model sometimes
     if epoch % 10 == 0  :
-        checkpoint_path = os.path.join(checkpoint_dir, f"naive_context_T2m_U10m_epoch_{epoch}.pth")
+        checkpoint_path = os.path.join(checkpoint_dir, f"attention_config_spatial_T2m_U10m_2019{epoch}.pth")
         torch.save({
             'epoch': epoch,
             'model_state_dict': vpsde.state_dict(),
@@ -151,12 +150,36 @@ for epoch in (bar := trange(TRAIN_CONFIG["epochs"], ncols=88)):
         with torch.no_grad():
             myLoader = DataLoader(trainset, batch_size=10, shuffle=True, num_workers=1,
                                     persistent_workers=True)
-            _, dic = next(iter(myLoader))
+            batch, dic = next(iter(myLoader))
             c = dic['context']
             c = c.to(device)
-            sampled_traj = vpsde.sample(c=c,shape=(10,), steps=100).detach().cpu()
-        info = {'var_index': ['T2m', 'U10m'], 'channels': 2, 'window': 12}
+            sampled_traj = vpsde.sample(c=c,shape=(10,), steps=100, corrections=5).detach().cpu()
+
+            batch = batch[0]
+            x = batch.repeat((3,) + (1,) * len(batch.shape))
+            t = torch.rand(x.shape[0], dtype=x.dtype)
+            c = dic["context"][0]
+            c = c.repeat((3,) + (1,) * len(c.shape))
+            # Noise  Levels to plot
+            t[0] = 0.1
+            t[1] = 0.3
+            t[2] = 0.6
+            t = t.to(device)
+            x = x.to(device)
+            c = c.to(device)
+            x_t = vpsde.forward(x, t, train=False)
+            print(f"x_t = {x_t.shape}, t : {t.shape}, c : {c.shape}, x : {x.shape}")
+            x_0 = vpsde.denoise(x_t, t, c).detach().cpu()
+            x_t = x_t.detach().cpu()
+            x = x.detach().cpu()
+
         path_unnorm = PATH / "data/norm_params.h5"
-        fig = plot_sample(sampled_traj, info, mask_cpu, path_unnorm, 5, step=3)
+        info = {'var_index': ['T2m', 'U10m'], 'channels': 2, 'window': 12}
+        fig = plot_sample(sampled_traj, info, mask_cpu,  samples=5, step=3, unnormalize=True, path_unnorm = path_unnorm)
+        wandb.log({'samples': wandb.Image(fig)})
+
+
+        new_tensor = torch.stack((x, x_t, x_0), dim=1).flatten(0, 1)
+        fig = plot_sample(new_tensor, info, mask_cpu, samples=9, step=3, unnormalize=False, path_unnorm = path_unnorm)
         wandb.log({'chart': wandb.Image(fig)})
     scheduler.step()
