@@ -262,8 +262,37 @@ class VPSDE(nn.Module):
 
             return x_0
 
+    def ddpm_sample(self, shape: torch.Size = (), c: torch.Tensor = None, steps: int = 1000):
+        x = torch.randn(shape + self.shape).to(self.device)
+        x = x.reshape(-1, *self.shape)
+        time = torch.linspace(1, 0, steps + 1).to(self.device)
+        alpha = self.alpha(time)
+        alpha_cumprod = torch.cumprod(alpha, dim=0)
+        sqrt_alpha_cumprod = torch.sqrt(alpha_cumprod)
+        sqrt_one_minus_alpha_cumprod = torch.sqrt(1 - alpha_cumprod)
+
+        with torch.no_grad():
+            for i, t in tqdm(enumerate(time), ncols=88):
+                # print(f"i : {i}, t : {t}")
+                alpha_t = alpha[i]
+                # alpha_cumprod_t = torch.cumprod(alpha[:i+1], dim=0)
+                # print(f"alpha_t : {alpha_t}, alpha_cumprod_t : {alpha_cumprod_t}")
+
+                sqrt_one_minus_alpha_cumprod_t = sqrt_one_minus_alpha_cumprod[i]
+                # print(f"x : {x.shape}, t : {t.shape}, c: {c.shape} ")
+                eps = self.eps(x, t, c)
+                if t == 0:
+                    z = 0
+                else:
+                    z = torch.randn_like(x)
+
+                sigma_t = self.sigma(t)
+                x = (1 / torch.sqrt(alpha_t)) * (x - ((1 - alpha_t) / sqrt_one_minus_alpha_cumprod_t) * eps) + sigma_t * z
+
+        return x
     def sample(
         self,
+        mask: Tensor,
         shape: Size = (),
         c: Tensor = None,
         steps: int = 64,
@@ -299,7 +328,7 @@ class VPSDE(nn.Module):
                     delta = tau / eps.square().mean(dim=self.dims, keepdim=True)
 
                     x = x - (delta * eps + torch.sqrt(2 * delta) * z) * self.sigma(t - dt)
-
+                x = x * mask
         return x.reshape(shape + self.shape)
 
     def loss(self, x: Tensor, c: Tensor = None, w: Tensor = None) -> Tensor:

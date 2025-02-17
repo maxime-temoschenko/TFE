@@ -33,25 +33,24 @@ validset = SequenceDataset(PATH / "data/test.h5", window=window, flatten=True)
 
 # Dimensions
 channels, y_dim, x_dim = trainset[0][0].shape #channels = (#var_keeps+1) * window
-
 # CONFIG
 TRAIN_CONFIG = {
     "epochs": 10000,
-    "batch_size": 16,
-    "learning_rate": 1e-4,
-    "weight_decay": 1e-5,
-    "scheduler": "linear",
-    "embedding": 128,
+    "batch_size": 48,
+    "learning_rate": 2e-4,
+    "weight_decay": 1e-4,
+    "scheduler": "cosine",
+    "embedding": 64,
     "activation": "SiLU",
-    "eta": 1e-6,
+    "eta": 5e-3,
 }
-MODEL_CONFIG = { 'hidden_channels' : [128, 256,512,512],
-'attention_levels' : [1,2,3,4],
-'hidden_blocks' : [3,3,3,3],
+MODEL_CONFIG = { 'hidden_channels' : [64, 128,128,256],
+'attention_levels' : [2],
+'hidden_blocks' : [2,3,3,3],
 'spatial' : 2,
 'channels' : channels,
 'context' : 4,
-'embedding' : 128 }
+'embedding' : 64 }
 CONFIG = {**TRAIN_CONFIG, **MODEL_CONFIG}
 run = wandb.init(
     project="Denoiser-Training",
@@ -85,7 +84,7 @@ else:
 
 scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
-checkpoint_dir = "checkpoints/attention_config_spatial_T2m_U10m_2005_2015"
+checkpoint_dir = "checkpoints/attention_config_spatial_T2m_U10m_2018"
 os.makedirs(checkpoint_dir, exist_ok=True)
 
 all_losses_train = []
@@ -172,7 +171,7 @@ for epoch in (bar := trange(TRAIN_CONFIG["epochs"], ncols=88)):
             x_0 = vpsde.denoise(x_t, t, c).detach().cpu()
             x_t = x_t.detach().cpu()
             x = x.detach().cpu()
-
+        # TODO : Add mask for sampling
         path_unnorm = PATH / "data/norm_params.h5"
         info = {'var_index': ['T2m', 'U10m'], 'channels': 2, 'window': 12}
         fig = plot_sample(sampled_traj, info, mask_cpu,  samples=5, step=3, unnormalize=True, path_unnorm = path_unnorm)
