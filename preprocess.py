@@ -215,10 +215,12 @@ def preprocess_xarray_to_numpy(dataset: xr.Dataset,
                                normalization_mode: str = None):
     # INPUT :
     # dataset : xarray.Dataset with Coordinates (time, x, y) and variables with NaN for undefined regions
-    # var_keeps : Variable to keep from the
+    # var_keeps : Variable to keep from the dataset
+    # size : Redimension dataset : (*,Y,X) -> (*,size, size)
+    # normalization_mode : choose how to normalize the data
     # ------
-    # Returns Numpy Array -> (Time, Y, X, Channel), Channel = var_keeps
-    # Mask specifies which values are undetemined, encoded as False
+    # Returns dictionnary
+    #
     norm_params = {}
     data_list = []
     ds = reduction_dataset(dataset, var_keeps)
@@ -255,7 +257,6 @@ def main(input_folder: str = 'data/',
          # preprocess
          size=64,
          normalization_mode: str = 'zscore',
-         save_mask_path: str = "data/mask.h5",
          ):
     info = locals()
     PATH = Path(output_folder)
@@ -276,8 +277,6 @@ def main(input_folder: str = 'data/',
     print(f"variables to keep are : {var_keeps}")
     print(f"Last 2D of batch_size will be : {size}")
     print(f"Normalization strategy for data: {normalization_mode}")
-    print(f"Mask save path: {save_mask_path}")
-
 
     # Preprocessing pipeline
     print('[TRAIN PREPROCESSING]')
