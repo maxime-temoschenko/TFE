@@ -4,8 +4,8 @@
 #
 #SBATCH --job-name "denoiser_attention"     # Name of the job
 #SBATCH --export=ALL             # Export all environment variables
-#SBATCH --output "attention_config_spatial_out_train.log"   # Log-file (important!)
-#SBATCH --error="attention_config_spatial_error_train.log"
+#SBATCH --output "attention_error.log"   # Log-file (important!)
+#SBATCH --error="attention.log"
 #SBATCH --cpus-per-task=2        # Number of CPU cores to allocate
 #SBATCH --mem-per-cpu=16g       # Memory to allocate in MB per allocated CPU core
 #SBATCH --partition=2080ti

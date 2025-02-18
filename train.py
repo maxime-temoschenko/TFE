@@ -13,14 +13,14 @@ from utils import SequenceDataset, plot_sample
 from score import ScoreUNet, MCScoreWrapper, VPSDE
 from score import VPSDE
 
-PATH = Path('..')
+PATH_DATA = Path('../data/processed')
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 window=12
 
-with h5py.File(PATH / "data/mask.h5", "r") as f:
+with h5py.File(PATH_DATA / "mask.h5", "r") as f:
     mask = torch.tensor(f["dataset"][:], dtype=torch.float32, device=device).unsqueeze(0)
     mask_cpu = mask.detach().clone().cpu()
 
@@ -28,8 +28,8 @@ if torch.isnan(mask).any():
     raise ValueError("Mask contains NaN values!")
 
 # Load Dataset
-trainset = SequenceDataset(PATH / "data/train.h5", window=window, flatten=True)
-validset = SequenceDataset(PATH / "data/test.h5", window=window, flatten=True)
+trainset = SequenceDataset(PATH_DATA / "train.h5", window=window, flatten=True)
+validset = SequenceDataset(PATH_DATA / "test.h5", window=window, flatten=True)
 
 # Dimensions
 channels, y_dim, x_dim = trainset[0][0].shape #channels = (#var_keeps+1) * window
@@ -84,7 +84,7 @@ else:
 
 scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
-checkpoint_dir = "checkpoints/attention_config_spatial_T2m_U10m_2018"
+checkpoint_dir = "checkpoints/attention_config_spatial_T2m_U10m_2000_2014"
 os.makedirs(checkpoint_dir, exist_ok=True)
 
 all_losses_train = []
@@ -130,13 +130,13 @@ for epoch in (bar := trange(TRAIN_CONFIG["epochs"], ncols=88)):
     loss_valid = torch.stack(losses_valid).mean().item()
     print(f"Train Loss : {loss_train}, Valid Loss : {loss_valid}")
     lr = optimizer.param_groups[0]['lr']
-    wandb.log({"Train Loss" : loss_train, "Valid Loss" : loss_valid, "lr" : lr})
+    log = {"Train Loss" : loss_train, "Valid Loss" : loss_valid, "lr" : lr}
     all_losses_train.append(loss_train)
     all_losses_valid.append(loss_valid)
 
     #Save model sometimes
     if epoch % 10 == 0  :
-        checkpoint_path = os.path.join(checkpoint_dir, f"attention_config_spatial_T2m_U10m_2019{epoch}.pth")
+        checkpoint_path = os.path.join(checkpoint_dir, f"attention_config_spatial_T2m_U10m_2000_2014_{epoch}.pth")
         torch.save({
             'epoch': epoch,
             'model_state_dict': vpsde.state_dict(),
@@ -152,7 +152,7 @@ for epoch in (bar := trange(TRAIN_CONFIG["epochs"], ncols=88)):
             batch, dic = next(iter(myLoader))
             c = dic['context']
             c = c.to(device)
-            sampled_traj = vpsde.sample(c=c,shape=(10,), steps=100, corrections=5).detach().cpu()
+            sampled_traj = vpsde.sample(mask,c=c,shape=(10,), steps=64, corrections=2).detach().cpu()
 
             batch = batch[0]
             x = batch.repeat((3,) + (1,) * len(batch.shape))
@@ -160,9 +160,9 @@ for epoch in (bar := trange(TRAIN_CONFIG["epochs"], ncols=88)):
             c = dic["context"][0]
             c = c.repeat((3,) + (1,) * len(c.shape))
             # Noise  Levels to plot
-            t[0] = 0.1
-            t[1] = 0.3
-            t[2] = 0.6
+            t[0] = 0.5
+            t[1] = 0.9
+            t[2] = 1
             t = t.to(device)
             x = x.to(device)
             c = c.to(device)
@@ -171,14 +171,14 @@ for epoch in (bar := trange(TRAIN_CONFIG["epochs"], ncols=88)):
             x_0 = vpsde.denoise(x_t, t, c).detach().cpu()
             x_t = x_t.detach().cpu()
             x = x.detach().cpu()
-        # TODO : Add mask for sampling
-        path_unnorm = PATH / "data/norm_params.h5"
+        path_unnorm = PATH_DATA / "train.h5"
         info = {'var_index': ['T2m', 'U10m'], 'channels': 2, 'window': 12}
         fig = plot_sample(sampled_traj, info, mask_cpu,  samples=5, step=3, unnormalize=True, path_unnorm = path_unnorm)
-        wandb.log({'samples': wandb.Image(fig)})
+        log['samples'] = wandb.Image(fig)
 
 
         new_tensor = torch.stack((x, x_t, x_0), dim=1).flatten(0, 1)
         fig = plot_sample(new_tensor, info, mask_cpu, samples=9, step=3, unnormalize=False, path_unnorm = path_unnorm)
-        wandb.log({'chart': wandb.Image(fig)})
+        log['chart'] =  wandb.Image(fig)
     scheduler.step()
+    wandb.log(log)

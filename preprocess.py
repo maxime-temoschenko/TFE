@@ -1,5 +1,5 @@
 import os
-
+import json
 import xarray
 import xarray as xr
 import numpy as np
@@ -105,10 +105,7 @@ def load_xarray(
 
 
 # largely inspired from https://github.com/schmidtjonathan/Climate2Weather/blob/main/data/pipeline.py
-def normalize_ds(var_data: np.array, var : str, normalization_mode: str = None, h5file_path: str = 'data/norm_params.h5'  ):
-    if h5file_path is None:
-        raise ValueError("h5file_path must be specified")
-
+def normalize_ds(var_data: np.array, var : str, normalization_mode: str = None  ):
     assert not (np.isinf(var_data).any()), f"{var} numpy array contains inf values !"
 
     if normalization_mode is None:
@@ -148,30 +145,15 @@ def normalize_ds(var_data: np.array, var : str, normalization_mode: str = None, 
     else:
         raise ValueError("Invalid normalization method")
 
-    with h5py.File(h5file_path, 'a') as norm_file: # Organization  : /{var}/{label}
-        if var not in norm_file:
-            var_group = norm_file.create_group(var)
-        else:
-            var_group = norm_file[var]
-
-        for label, value in norm_dic.items():
-            if label in var_group:
-                del var_group[label]
-            var_group.create_dataset(label, data=value)
-    return var_data
+    return var_data, norm_dic
 
 
 # largely inspired from https://github.com/schmidtjonathan/Climate2Weather/blob/main/data/pipeline.py
 def unnormalize_ds(norm_data: np.array, var : str, normfile_path : str = "data/norm_params.h5", normalization_mode: str = None):
-    if normfile_path is None:
-        raise ValueError('Undefined normfile_path')
-
-
-    with h5py.File(normfile_path, 'r') as norm_file:
-        if var not in norm_file:
-            raise KeyError(f"The variable hasn't been found in the file : Check normalization")
-        var_group = norm_file[var]
-        norm_dic = {key: var_group[key][()] for key in var_group.keys()}
+    norm_params = load_norm_params(normfile_path)
+    if var not in norm_params:
+        raise ValueError(f"{var} doesn't exist in the normalization of {normfile_path}")
+    norm_dic = norm_params[var]
 
     if normalization_mode is None:
         unnorm_data = norm_data
@@ -230,25 +212,21 @@ def resize_array(arr: np.array, size: int , value=np.nan):
 def preprocess_xarray_to_numpy(dataset: xr.Dataset,
                                var_keeps: list[str] = ['RF', 'U10m', 'T2m'],
                                size= 64,
-                               normalization_mode: str = None,
-                               save_norm_path: str='data/norm_params.h5',
-                               save_mask_path: str="data/mask.h5"):
+                               normalization_mode: str = None):
     # INPUT :
     # dataset : xarray.Dataset with Coordinates (time, x, y) and variables with NaN for undefined regions
     # var_keeps : Variable to keep from the
     # ------
     # Returns Numpy Array -> (Time, Y, X, Channel), Channel = var_keeps
     # Mask specifies which values are undetemined, encoded as False
+    norm_params = {}
     data_list = []
     ds = reduction_dataset(dataset, var_keeps)
-    # Mask
     mask = ~np.isnan(ds[var_keeps[0]].isel(time=0).values) # Constant mask over time
-    # Date Information
     time_data = ds['time'].values
-    # Process each variable
     for var in var_keeps:
         var_data = ds[var].values
-        var_data = normalize_ds(var_data,var, normalization_mode,h5file_path=save_norm_path)
+        var_data, norm_params[var] = normalize_ds(var_data,var, normalization_mode)
         var_data = np.nan_to_num(var_data, nan=0.0)
         data_list.append(var_data)
     data_np = np.stack(data_list, axis=-1)
@@ -256,75 +234,35 @@ def preprocess_xarray_to_numpy(dataset: xr.Dataset,
 
     data_np = resize_array(data_np,size=size, value=0.)
     mask = resize_array(mask, size=size,value = False)
+    return {'data' : data_np, 'mask' : mask, 'time' : time_data, 'norm_params': norm_params}
 
-    if save_mask_path is not None:
-        with h5py.File(save_mask_path, 'w') as hdf5_file:
-            hdf5_file.create_dataset('dataset', data=mask)
-
-    return data_np, mask, time_data
-
-# TODO : Potentially remove
-def create_trajectory(data: np.array, L: int = 32, overlapping=True):
-    # Create overlapping time trajectories from (T, C, Y, X) array
-    # L is the length of the trajectory
-    # ------
-    # overlapping :
-    # True : (T, C, Y, X) -> (T-L+1, L, C, Y, X)
-    # False : (T, C, Y, X) -> (T//L, L, C, Y, X)
-    if overlapping == True:
-        as_strided = np.lib.stride_tricks.as_strided
-        resize = (data.shape[0] - L + 1, L) + data.shape[1:]
-        stride = (data.strides[0],) + data.strides
-        trajectory_data = as_strided(data, resize, stride)
-    else:
-        parts = data.shape[0] // L
-        trajectory_data = np.zeros((parts, L) + data.shape[1:], dtype=data.dtype)
-        for i in range(parts):
-            trajectory_data[i] = data[i * L: (i + 1) * L]
-    return trajectory_data
-
-# TODO : Potentially remove
-# Largely inspired from : https://github.com/francois-rozet/sda/blob/qg/experiments/kolmogorov/generate.py#L31
-def generate(data: np.array):
-    # Create File Dataset to prepare for the training from numpy array
-    # -----------
-    # INPUT :
-    # data : (#Trajectory,L_Trajectory,Channels,Y,X)
-    # --------
-    np.random.shuffle(data)  # Shuffle along the first axis
-    length = data.shape[0]
-    i = int(0.8 * length)
-    j = int(0.9 * length)
-
-    splits = {
-        'train': data[:i],
-        'valid': data[i:j],
-        'test': data[:j]
-    }
-
-    PATH = Path('.')
-    for name, x in splits.items():
-        PATH_DATA = PATH / 'data'
-        PATH_DATA.mkdir(exist_ok=True)
-        with h5py.File(PATH / f'data/{name}.h5', mode='w') as f:
-            f.create_dataset('x', data=x, dtype=np.float32)
-    print('[GENERATE]')
-    print('Files are written')
-    print('[\GENERATE]')
-
-
-
-
+def save_dataset_info(output_folder, args):
+    with open(Path(output_folder) / "dataset_info.txt", "w") as f:
+        json.dump(args, f, indent=4)
+def load_norm_params(h5_path: str):
+    norm_params = {}
+    with h5py.File(h5_path, 'r') as f:
+        for var in f['norm_params'].keys():
+            norm_params[var] = {key: f[f'norm_params/{var}/{key}'][()] for key in f[f'norm_params/{var}'].keys()}
+    return norm_params
 def main(input_folder: str = 'data/',
+         output_folder : str = 'data/processed',
          start_year_train: int = 2021,
          end_year_train: int = 2021,
-         year_test : int = 2022,
+         start_year_test : int = 2022,
+         end_year_test : int = 2022,
          var_keeps: list[str] = ['T2m', 'U10m'],
          # preprocess
          size=64,
          normalization_mode: str = 'zscore',
          save_mask_path: str = "data/mask.h5",
          ):
+    info = locals()
+    PATH = Path(output_folder)
+    PATH.mkdir(exist_ok=True)
+
+    save_dataset_info(output_folder, info)
+
     # By default keeps all variables
     if var_keeps is None:
         var_keeps = ["CC", "EP", "ET", "LHF", "LWD", "RF", "RH2m", "Q2m"
@@ -334,7 +272,7 @@ def main(input_folder: str = 'data/',
     print('[PREPROCESSING]')
     print(f"Folder Path: {input_folder}")
     print(f"Training : {start_year_train} to {end_year_train}")
-    print(f"Test : {year_test}")
+    print(f"Test : {start_year_test} to {end_year_test}")
     print(f"variables to keep are : {var_keeps}")
     print(f"Last 2D of batch_size will be : {size}")
     print(f"Normalization strategy for data: {normalization_mode}")
@@ -345,31 +283,33 @@ def main(input_folder: str = 'data/',
     print('[TRAIN PREPROCESSING]')
     # Train
     train_ds = load_xarray(input_folder=input_folder, start_year=start_year_train, end_year=end_year_train, var_keeps=var_keeps)
-    #assert (np.isinf(train_ds['T2m'].to_numpy()).any()), f"Still inf values !"
-    train_np_ds, mask, train_time_date = preprocess_xarray_to_numpy(train_ds,var_keeps=var_keeps,size=size,normalization_mode=normalization_mode,save_mask_path=save_mask_path)
+    train_data_dict = preprocess_xarray_to_numpy(train_ds,var_keeps=var_keeps,size=size,normalization_mode=normalization_mode)
     print('[\TRAIN PREPROCESSING]')
     # Test
     print('[TEST PREPROCESSING')
-    test_ds = load_xarray(input_folder=input_folder, start_year=year_test, end_year=year_test, var_keeps=var_keeps)
-    test_np_ds, _, test_time_date  = preprocess_xarray_to_numpy(test_ds, var_keeps=var_keeps, size=size,
-                                                normalization_mode=normalization_mode,save_norm_path='data/test_norm_params.h5', save_mask_path=save_mask_path )
+    test_ds = load_xarray(input_folder=input_folder, start_year=start_year_test, end_year=end_year_test, var_keeps=var_keeps)
+    test_data_dict = preprocess_xarray_to_numpy(test_ds, var_keeps=var_keeps, size=size,normalization_mode=normalization_mode)
     print('[\TEST PREPROCESSING]')
 
 
-    # Save the files and make it compatible with Trajectory Dataset
-    dataset = {'train': {'data': train_np_ds, 'date' : train_time_date},
-               'test': {'data' : test_np_ds, 'date' : test_time_date}}
+    # Save the files
+    dataset = {'train': train_data_dict,
+               'test': test_data_dict}
     print('[GENERATE]')
-    print(type(train_time_date[0]))
-    print(train_time_date[0])
-    PATH = Path('.')
-    for name, x in dataset.items():
-        PATH_DATA = PATH / 'data'
-        PATH_DATA.mkdir(exist_ok=True)
-        with h5py.File(PATH / f'data/{name}.h5', mode='w') as f:
-            f.create_dataset('data', data=x['data'], dtype=np.float32)
-            f.create_dataset('date', data=x['date'].astype('S'), dtype=h5py.special_dtype(vlen=str))
-        print(f"Write to {PATH / f'data/{name}.h5'}")
+
+    for name, data_dict in dataset.items():
+        with h5py.File(PATH / f'{name}.h5', mode='w') as f:
+            f.create_dataset('data', data=data_dict['data'], dtype=np.float32)
+            f.create_dataset('date', data=data_dict['time'].astype('S'), dtype=h5py.special_dtype(vlen=str))
+            norm_grp = f.create_group('norm_params')
+            for var, norm_params in data_dict['norm_params'].items():
+                var_grp = norm_grp.create_group(var)
+                for key, value in norm_params.items():
+                    var_grp.create_dataset(key, data=value)
+        print(f"Write to {PATH / f'{name}.h5'}")
+    with h5py.File(PATH / "mask.h5", mode='w') as f:
+        f.create_dataset('dataset', data=train_data_dict['mask'])
+    print(f"Write to {PATH / 'mask.h5'}")
     print('[\GENERATE]')
 
 
