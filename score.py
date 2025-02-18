@@ -270,25 +270,17 @@ class VPSDE(nn.Module):
         alpha_cumprod = torch.cumprod(alpha, dim=0)
         sqrt_alpha_cumprod = torch.sqrt(alpha_cumprod)
         sqrt_one_minus_alpha_cumprod = torch.sqrt(1 - alpha_cumprod)
-
         with torch.no_grad():
             for i, t in tqdm(enumerate(time), ncols=88):
-                # print(f"i : {i}, t : {t}")
                 alpha_t = alpha[i]
-                # alpha_cumprod_t = torch.cumprod(alpha[:i+1], dim=0)
-                # print(f"alpha_t : {alpha_t}, alpha_cumprod_t : {alpha_cumprod_t}")
-
                 sqrt_one_minus_alpha_cumprod_t = sqrt_one_minus_alpha_cumprod[i]
-                # print(f"x : {x.shape}, t : {t.shape}, c: {c.shape} ")
                 eps = self.eps(x, t, c)
                 if t == 0:
                     z = 0
                 else:
                     z = torch.randn_like(x)
-
                 sigma_t = self.sigma(t)
                 x = (1 / torch.sqrt(alpha_t)) * (x - ((1 - alpha_t) / sqrt_one_minus_alpha_cumprod_t) * eps) + sigma_t * z
-
         return x
     def sample(
         self,
@@ -319,7 +311,8 @@ class VPSDE(nn.Module):
             for t in tqdm(time[:-1], ncols=88):
                 # Predictor
                 r = self.mu(t - dt) / self.mu(t)
-                x = r * x + (self.sigma(t - dt) - r * self.sigma(t)) * self.eps(x, t, c)
+                eps = self.eps(x,t,c)
+                x = r * x + (self.sigma(t - dt) - r * self.sigma(t)) * eps
 
                 # Corrector
                 for _ in range(corrections):
@@ -385,6 +378,7 @@ class DPSGaussianScore(nn.Module):
     def __init__(
         self,
         y: Tensor,
+        mask : Tensor,
         A: Callable[[Tensor], Tensor],
         sde: VPSDE,
         zeta: float = 1.0,
@@ -392,25 +386,26 @@ class DPSGaussianScore(nn.Module):
         super().__init__()
 
         self.register_buffer('y', y)
-
+        self.register_buffer('mask', mask)
         self.A = A
         self.sde = sde
         self.zeta = zeta
 
-    def forward(self, x: Tensor, t: Tensor) -> Tensor:
+    def forward(self, x: Tensor, t: Tensor, c : Tensor) -> Tensor:
         mu, sigma = self.sde.mu(t), self.sde.sigma(t)
 
         with torch.enable_grad():
             x = x.detach().requires_grad_(True)
 
-            eps = self.sde.eps(x, t)
+            eps = self.sde.eps(x, t,c)
             x_ = (x - sigma * eps) / mu
-            err = (self.y - self.A(x_)).square().sum()
+            x_ = x_ * self.mask
+            err = ( (self.y*self.mask) - (self.A(x_)*self.mask)).square().sum()
 
         s, = torch.autograd.grad(err, x)
         s = -s * self.zeta / err.sqrt()
 
-        return eps - sigma * s
+        return (eps - sigma * s)*self.mask
 
 
 class GaussianScore(nn.Module):
@@ -425,6 +420,7 @@ class GaussianScore(nn.Module):
     def __init__(
         self,
         y: Tensor,
+        mask : Tensor,
         A: Callable[[Tensor], Tensor],
         std: Union[float, Tensor],
         sde: VPSDE,
@@ -436,7 +432,7 @@ class GaussianScore(nn.Module):
         self.register_buffer('y', y)
         self.register_buffer('std', torch.as_tensor(std))
         self.register_buffer('gamma', torch.as_tensor(gamma))
-
+        self.register_buffer('mask', mask)
         self.A = A
         self.sde = sde
         self.detach = detach
@@ -452,14 +448,14 @@ class GaussianScore(nn.Module):
 
             if not self.detach:
                 eps = self.sde.eps(x, t, c)
-
+            mask = self.mask
             x_ = (x - sigma * eps) / mu
-
-            err = self.y - self.A(x_)
+            x_ = x_ * mask
+            err = (self.y - self.A(x_))*mask
             var = self.std ** 2 + self.gamma * (sigma / mu) ** 2
 
             log_p = -(err ** 2 / var).sum() / 2
 
         s, = torch.autograd.grad(log_p, x)
 
-        return eps - sigma * s
+        return (eps*mask) - sigma * (s*mask)
