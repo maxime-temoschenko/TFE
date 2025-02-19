@@ -54,7 +54,10 @@ MODEL_CONFIG = { 'hidden_channels' : [64, 128,128,256],
 CONFIG = {**TRAIN_CONFIG, **MODEL_CONFIG}
 run = wandb.init(
     project="Denoiser-Training",
-    config= CONFIG)
+    config= CONFIG,
+    id='zunlr7y7',
+    resume='allow'
+)
 '''
 Definition of Denoiser and Scheduler
 '''
@@ -86,10 +89,23 @@ scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
 checkpoint_dir = "checkpoints/attention_config_spatial_T2m_U10m_2000_2014"
 os.makedirs(checkpoint_dir, exist_ok=True)
+latest_checkpoint = sorted(Path(checkpoint_dir).glob("*.pth"), key=os.path.getctime)[-1]
+
+start_epoch = 0
+if latest_checkpoint:
+    print(f"Resuming from checkpoint: {latest_checkpoint}")
+    checkpoint = torch.load(latest_checkpoint, map_location=device)
+    vpsde.load_state_dict(checkpoint["model_state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    start_epoch = checkpoint["epoch"] + 1  # Resume from the next epoch
+    print(f"Resuming training from epoch {start_epoch}")
+else:
+    print("No checkpoint found, starting fresh.")
+
 
 all_losses_train = []
 all_losses_valid = []
-for epoch in (bar := trange(TRAIN_CONFIG["epochs"], ncols=88)):
+for epoch in (bar := trange(start_epoch, TRAIN_CONFIG["epochs"], ncols=88)):
     losses_train = []
     losses_valid = []
 
