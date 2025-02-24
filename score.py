@@ -262,9 +262,9 @@ class VPSDE(nn.Module):
 
             return x_0
 
-    def ddpm_sample(self, shape: torch.Size = (), c: torch.Tensor = None, steps: int = 1000):
+    def ddpm_sample(self,mask,  shape: torch.Size = (), c: torch.Tensor = None, steps: int = 1000):
         x = torch.randn(shape + self.shape).to(self.device)
-        x = x.reshape(-1, *self.shape)
+        x = x.reshape(-1, *self.shape) * mask
         time = torch.linspace(1, 0, steps + 1).to(self.device)
         alpha = self.alpha(time)
         alpha_cumprod = torch.cumprod(alpha, dim=0)
@@ -274,13 +274,14 @@ class VPSDE(nn.Module):
             for i, t in tqdm(enumerate(time), ncols=88):
                 alpha_t = alpha[i]
                 sqrt_one_minus_alpha_cumprod_t = sqrt_one_minus_alpha_cumprod[i]
-                eps = self.eps(x, t, c)
+                eps = self.eps(x, t, c) * mask
                 if t == 0:
                     z = 0
                 else:
-                    z = torch.randn_like(x)
+                    z = torch.randn_like(x) * mask
                 sigma_t = self.sigma(t)
                 x = (1 / torch.sqrt(alpha_t)) * (x - ((1 - alpha_t) / sqrt_one_minus_alpha_cumprod_t) * eps) + sigma_t * z
+                x = x*mask
         return x
     def sample(
         self,
@@ -300,7 +301,7 @@ class VPSDE(nn.Module):
             corrections: The number of Langevin corrections per time steps.
             tau: The amplitude of Langevin steps.
         """
-
+        print('hello')
         x = torch.randn(shape + self.shape).to(self.device)
         x = x.reshape(-1, *self.shape)
 
@@ -310,18 +311,19 @@ class VPSDE(nn.Module):
         with torch.no_grad():
             for t in tqdm(time[:-1], ncols=88):
                 # Predictor
+                x = x * mask
                 r = self.mu(t - dt) / self.mu(t)
-                eps = self.eps(x,t,c)
-                x = r * x + (self.sigma(t - dt) - r * self.sigma(t)) * eps
-
+                eps = self.eps(x,t,c) * mask
+                x = r * x + (self.sigma(t - dt) - r * self.sigma(t)) * eps 
                 # Corrector
                 for _ in range(corrections):
-                    z = torch.randn_like(x)
-                    eps = self.eps(x, t - dt, c)
-                    delta = tau / eps.square().mean(dim=self.dims, keepdim=True)
-
-                    x = x - (delta * eps + torch.sqrt(2 * delta) * z) * self.sigma(t - dt)
-                x = x * mask
+                    z = torch.randn_like(x) * mask
+                    x = x * mask
+                    eps = self.eps(x, t - dt, c) * mask
+                    delta = tau / (eps).square().mean(dim=self.dims, keepdim=True)
+                    x = x - (delta * eps + torch.sqrt(2 * delta) * z) * self.sigma(t - dt) 
+                    
+            x = x * mask
         return x.reshape(shape + self.shape)
 
     def loss(self, x: Tensor, c: Tensor = None, w: Tensor = None) -> Tensor:

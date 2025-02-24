@@ -1,5 +1,5 @@
 import h5py
-import preprocess
+from TFE import preprocess
 import matplotlib.pyplot as plt
 import torch
 import numpy as np
@@ -15,12 +15,13 @@ class SequenceDataset(Dataset):
     def __init__(self,
                  file: Path,
                  window : int = None,
-                 flatten: bool = False):
+                 flatten: bool = False,
+                 slicer : slice = slice(None)):
         super().__init__()
         with h5py.File(file, mode='r') as f:
             # TODO : Remove 12, these are for debugging purpose
-            self.data = f['data'][:]
-            self.date = f['date'][:]
+            self.data = f['data'][slicer]
+            self.date = f['date'][slicer]
         self.date = [datetime.fromisoformat(d.decode()[:-6]) for d in self.date]
         self.window = window
         self.flatten = flatten
@@ -37,8 +38,6 @@ class SequenceDataset(Dataset):
 
         )
         self.spatial_encoding = torch.cat((grid.cos(), grid.sin()), dim=0)
-        print(f"Spatial Encoding Shape : {self.spatial_encoding.shape}")
-
     def __len__(self) -> int:
         return len(self.data) - self.window + 1
     def __getitem__(self, i: int) -> Tuple[Tensor, Dict]:
@@ -61,7 +60,22 @@ class SequenceDataset(Dataset):
             return traj_x.flatten(0, 1), { 'context' : context}
 
         return traj_x, { 'context' : context}
-
+        
+class BatchDataset(Dataset):
+    def __init__(self, file: Path, data_keyword = 'samples'):
+        super().__init__()
+        with h5py.File(file, mode='r') as f:
+            self.data = f[data_keyword][:]  # shape: (N, channels, y, x)
+        _, self.channels, self.y, self.x = self.data.shape
+        grid_y = 2 * torch.pi * torch.arange(self.y, dtype=torch.float32) / self.y
+        grid_x = 2 * torch.pi * torch.arange(self.x, dtype=torch.float32) / self.x
+        grid = torch.stack(torch.meshgrid(grid_y, grid_x, indexing='ij'))
+        self.spatial_encoding = torch.cat((grid.cos(), grid.sin()), dim=0)
+    def __len__(self):
+        return self.data.shape[0]
+    def __getitem__(self, i):
+        sample = torch.from_numpy(self.data[i])
+        return sample, {'context': self.spatial_encoding}
 
 def date_encoding(day : int, hour : int):
     day_emb = (np.sin(2*np.pi*day/365), np.cos(2*np.pi*day/365))
