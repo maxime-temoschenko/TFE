@@ -43,7 +43,7 @@ channels, y_dim, x_dim = trainset[0][0].shape #channels = (#var_keeps+1) * windo
 # CONFIG
 TRAIN_CONFIG = {
     "epochs": 10000,
-    "batch_size": 48,
+    "batch_size": 16,
     "learning_rate": 2e-4,
     "weight_decay": 1e-4,
     "scheduler": "cosine",
@@ -51,9 +51,8 @@ TRAIN_CONFIG = {
     "activation": "SiLU",
     "eta": 5e-3,
 }
-MODEL_CONFIG = { 'hidden_channels' : [64,128,256,512,1024],
-'attention_levels' : [1,2,3,4],
-'hidden_blocks' : [2,3,3,3],
+MODEL_CONFIG = { 'hidden_channels' : [64],
+'hidden_blocks' : [2],
 'spatial' : 2,
 'channels' : channels,
 'context' : 5,
@@ -161,14 +160,12 @@ for epoch in (bar := trange(start_epoch, TRAIN_CONFIG["epochs"], ncols=88)):
             myLoader = DataLoader(trainset, batch_size=10, shuffle=True, num_workers=1,
                                     persistent_workers=True)
             batch, dic = next(iter(myLoader))
-            c = dic['context']
-            c = c.to(device)
+            c = constructEmbedding(date_embedding, dic).to(device)
             sampled_traj = vpsde.sample(mask,c=c,shape=(10,), steps=128, corrections=1).detach().cpu()
-
             batch = batch[0]
             x = batch.repeat((3,) + (1,) * len(batch.shape))
             t = torch.rand(x.shape[0], dtype=x.dtype)
-            c = dic["context"][0]
+            c = constructEmbedding(date_embedding, dic)[0]
             c = c.repeat((3,) + (1,) * len(c.shape))
             # Noise  Levels to plot
             t[0] = 0.5

@@ -93,7 +93,7 @@ def plot_sample(batch,info,mask, samples, step=4, unnormalize=True, path_unnorm 
     redim_batch = batch.view(B, info['window'], info['channels'], Y,X).permute(0, 2, 1, 3, 4)
     if unnormalize == True:
         for i in range(info['channels']):
-            redim_batch[:,i, ...] = preprocess.unnormalize_ds(redim_batch[:,i, ...], info['var_index'][i], normfile_path=path_unnorm ,normalization_mode='zscore')
+            redim_batch[:,i, ...] = unnormalize_ds(redim_batch[:,i, ...], info['var_index'][i], normfile_path=path_unnorm ,normalization_mode='zscore')
     traj= torch.where(mask.unsqueeze(0).unsqueeze(0).bool(), redim_batch, torch.tensor(float('nan'), dtype=redim_batch.dtype))
     data = traj
     s, variables, timesteps, y_dim, x_dim = data.shape
