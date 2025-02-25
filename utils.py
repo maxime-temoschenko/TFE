@@ -1,14 +1,16 @@
 import h5py
-from TFE import preprocess
+from preprocess import *
 import matplotlib.pyplot as plt
 import torch
 import numpy as np
+import torch.nn as nn
 
 from pathlib import Path
 from torch import Tensor
 from torch.utils.data import Dataset
 from typing import *
 from datetime import datetime
+from siren_pytorch import SirenNet
 
 # Adapted from https://github.com/francois-rozet/sda/blob/qg/sda/utils.py#L58
 class SequenceDataset(Dataset):
@@ -16,50 +18,38 @@ class SequenceDataset(Dataset):
                  file: Path,
                  window : int = None,
                  flatten: bool = False,
-                 slicer : slice = slice(None)):
+                 slicer_data : slice = slice(None)):
         super().__init__()
         with h5py.File(file, mode='r') as f:
-            # TODO : Remove 12, these are for debugging purpose
-            self.data = f['data'][slicer]
-            self.date = f['date'][slicer]
-        self.date = [datetime.fromisoformat(d.decode()[:-6]) for d in self.date]
+            self.data = f['data'][slicer_data]
+            self.date = f['date'][slicer_data]
+        date = [datetime.fromisoformat(d.decode()[:-6]) for d in self.date]
+        self.frac_hour = [d.hour / 23 for d in date]
+        self.frac_day_of_year = [d.timetuple().tm_yday / 365 for d in date]
         self.window = window
         self.flatten = flatten
-
         # Spatial Encoding
         _, _, self.y, self.x = self.data.shape
-
         grid = torch.stack(
             torch.meshgrid(
                 2*torch.pi*torch.arange(self.y)/self.y,
                 2*torch.pi*torch.arange(self.x)/self.x,
                 indexing='ij'
             )
-
         )
         self.spatial_encoding = torch.cat((grid.cos(), grid.sin()), dim=0)
     def __len__(self) -> int:
         return len(self.data) - self.window + 1
     def __getitem__(self, i: int) -> Tuple[Tensor, Dict]:
         data_x = torch.from_numpy(self.data)
-
+        day_, hour_ = self.frac_day_of_year[i], self.frac_hour[i]
         i = torch.randint(0, len(self.data) - self.window + 1, size=()).item()
-
         traj_x = torch.narrow(data_x, dim=0, start=i, length=self.window)
-        traj_date = self.date[i: i + self.window]
-
-        # Embedding :
-        date_enc = torch.tensor([
-            date_encoding(d.timetuple().tm_yday, d.hour) for d in traj_date
-        ]).float()
-        date_enc = date_enc.view(self.window*4,1,1).expand(-1,self.y, self.x)# [WINDOW*4, Y,X]
-
-        #context = torch.cat([date_enc, self.spatial_encoding], dim=0)
         context = self.spatial_encoding
         if self.flatten:
-            return traj_x.flatten(0, 1), { 'context' : context}
+            return traj_x.flatten(0, 1), { 'context' : context, 'frac_day_of_year' : day_, 'frac_hour_of_day' : hour_}
 
-        return traj_x, { 'context' : context}
+        return traj_x, { 'context' : context, 'frac_day_of_year' : day_[i], 'frac_hour_of_day' : hour_[i]}
         
 class BatchDataset(Dataset):
     def __init__(self, file: Path, data_keyword = 'samples'):
@@ -81,6 +71,22 @@ def date_encoding(day : int, hour : int):
     day_emb = (np.sin(2*np.pi*day/365), np.cos(2*np.pi*day/365))
     hour_emb = (np.sin(2*np.pi*hour/365), np.cos(2*np.pi*hour/365))
     return day_emb+hour_emb
+
+
+class DateEmbedding(nn.Module):
+    def __init__(self, x: int = 64, y: int = 64, hidden_dim=256, num_layers=5, w0_initial=30, **kwargs):
+        super().__init__()
+        self.x = x
+        self.y = y
+        self.nn = SirenNet(dim_in=2, dim_hidden=hidden_dim, num_layers=num_layers, dim_out=x * y,
+                           final_activation=nn.Sigmoid(), w0_initial=30)
+
+    def forward(self, frac_day, frac_hour):
+        input_nn = torch.stack((frac_day, frac_hour), dim=1).float()
+        output = self.nn(input_nn)
+        return output.view(-1, self.y, self.x)
+
+
 def plot_sample(batch,info,mask, samples, step=4, unnormalize=True, path_unnorm = 'data/norm_params.h5'):
     print(batch.shape)
     B, Z, Y , X = batch.shape

@@ -1,3 +1,5 @@
+import sys
+sys.path.append('.')
 import os
 import h5py
 import math
@@ -9,11 +11,15 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import trange
 from pathlib import Path
-from utils import SequenceDataset, plot_sample
+from utils import SequenceDataset, plot_sample, DateEmbedding
 from score import ScoreUNet, MCScoreWrapper, VPSDE
 from score import VPSDE
 
-PATH_DATA = Path('../data/processed')
+def constructEmbedding(date_embedding, dic):
+    return torch.concat((dic['context'], date_embedding(dic['frac_day_of_year'], dic['frac_hour_of_day']).unsqueeze(1)), dim=1)
+
+
+PATH_DATA = Path('./data/processed')
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -26,7 +32,8 @@ with h5py.File(PATH_DATA / "mask.h5", "r") as f:
 
 if torch.isnan(mask).any():
     raise ValueError("Mask contains NaN values!")
-
+#Date Embedding
+date_embedding  = DateEmbedding()
 # Load Dataset
 trainset = SequenceDataset(PATH_DATA / "train.h5", window=window, flatten=True)
 validset = SequenceDataset(PATH_DATA / "test.h5", window=window, flatten=True)
@@ -44,12 +51,12 @@ TRAIN_CONFIG = {
     "activation": "SiLU",
     "eta": 5e-3,
 }
-MODEL_CONFIG = { 'hidden_channels' : [128,256,256,512],
-'attention_levels' : [3],
+MODEL_CONFIG = { 'hidden_channels' : [64,128,256,512,1024],
+'attention_levels' : [1,2,3,4],
 'hidden_blocks' : [2,3,3,3],
 'spatial' : 2,
 'channels' : channels,
-'context' : 4,
+'context' : 5,
 'embedding' : 64 }
 CONFIG = {**TRAIN_CONFIG, **MODEL_CONFIG}
 run = wandb.init(
@@ -71,7 +78,7 @@ trainloader = DataLoader(trainset, batch_size=TRAIN_CONFIG["batch_size"], shuffl
 validloader = DataLoader(validset, batch_size=TRAIN_CONFIG["batch_size"], shuffle=False, num_workers=1, persistent_workers=True)
 
 
-optimizer = optim.AdamW(vpsde.parameters(), lr=TRAIN_CONFIG["learning_rate"], weight_decay=TRAIN_CONFIG["weight_decay"])
+optimizer = optim.AdamW([*vpsde.parameters(), *date_embedding.parameters()], lr=TRAIN_CONFIG["learning_rate"], weight_decay=TRAIN_CONFIG["weight_decay"])
 
 # Define Learning Rate Scheduler
 if TRAIN_CONFIG["scheduler"] == "linear":
@@ -85,7 +92,7 @@ else:
 
 scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
-checkpoint_dir = "checkpoints/test_attention_config_spatial_T2m_U10m_2000_2014"
+checkpoint_dir = "checkpoints/multi_attention_config_spatial_T2m_U10m_2000_2014"
 os.makedirs(checkpoint_dir, exist_ok=True)
 
 start_epoch = 0
@@ -101,7 +108,7 @@ for epoch in (bar := trange(start_epoch, TRAIN_CONFIG["epochs"], ncols=88)):
     vpsde.train()
     for i, (batch, dic) in enumerate(trainloader):
         batch = batch.to(device)
-        c = dic['context'].to(device)
+        c = constructEmbedding(date_embedding,dic).to(device)
         if torch.isnan(batch).any():
             raise ValueError("batch contains NaN values!")
         batch = batch.to(device)
@@ -123,7 +130,7 @@ for epoch in (bar := trange(start_epoch, TRAIN_CONFIG["epochs"], ncols=88)):
     with torch.no_grad():
         for batch, dic in validloader:
             batch = batch.to(device)
-            c = dic['context'].to(device)
+            c = constructEmbedding(date_embedding,dic).to(device)
             mask_batch = mask.to(device).expand_as(batch)
             w = mask_batch.float()
 
@@ -140,7 +147,7 @@ for epoch in (bar := trange(start_epoch, TRAIN_CONFIG["epochs"], ncols=88)):
 
     #Save model sometimes
     if epoch % 10 == 0  :
-        checkpoint_path = os.path.join(checkpoint_dir, f"test_attention_config_spatial_T2m_U10m_2000_2014_{epoch}.pth")
+        checkpoint_path = os.path.join(checkpoint_dir, f"multi_attention_config_spatial_T2m_U10m_2000_2014_{epoch}.pth")
         torch.save({
             'epoch': epoch,
             'model_state_dict': vpsde.state_dict(),

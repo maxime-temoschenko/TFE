@@ -2,10 +2,10 @@
 #
 # Slurm arguments
 #
-#SBATCH --job-name "enhanced_denoiser"     # Name of the job
+#SBATCH --job-name "full_denoiser"     # Name of the job
 #SBATCH --export=ALL             # Export all environment variables
-#SBATCH --output "enhanced_attention_error.log"   # Log-file (important!)
-#SBATCH --error="enhanced_attention.log"
+#SBATCH --output "full_attention_error.log"   # Log-file (important!)
+#SBATCH --error="full_attention.log"
 #SBATCH --cpus-per-task=2        # Number of CPU cores to allocate
 #SBATCH --mem-per-cpu=16g       # Memory to allocate in MB per allocated CPU core
 #SBATCH --partition=2080ti
@@ -18,4 +18,5 @@ conda activate deep_learning
 
 # Train
 #python ../preprocess.py
-python ../train.py
+cd ..
+python train.py
