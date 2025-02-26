@@ -47,7 +47,6 @@ def main():
         print(f"Using device: {device} on rank {local_rank}")
 
     PATH_DATA = Path('./data/processed')
-    window = 12
 
     # Load mask
     with h5py.File(PATH_DATA / "mask.h5", "r") as f:
@@ -56,7 +55,7 @@ def main():
 
     if torch.isnan(mask).any():
         raise ValueError("Mask contains NaN values!")
-
+    window = 12
     # Date Embedding
     date_embedding = DateEmbedding().to(device)
 
@@ -73,8 +72,9 @@ def main():
 
     # CONFIG
     TRAIN_CONFIG = {
+        "window" : 12,
         "epochs": 10000,
-        "batch_size": 192,
+        "batch_size": 32,
         "learning_rate": 2e-4,
         "weight_decay": 1e-4,
         "scheduler": "cosine",
@@ -84,10 +84,10 @@ def main():
     }
     MODEL_CONFIG = {
         'hidden_channels': [64, 128, 256, 512, 1024],
-        'attention_levels': [1, 2, 3, 4],
-        'hidden_blocks': [2, 3, 3, 3],
+        'attention_levels': [4],
+        'hidden_blocks': [2, 3, 3, 3,3],
         'spatial': 2,
-        'channels': channels,
+        'channels': 24,
         'context': 5,
         'embedding': 64
     }
@@ -95,10 +95,14 @@ def main():
 
     # Initialize wandb only on rank 0
     if local_rank == 0:
-        wandb.init(
+        run = wandb.init(
             project="Denoiser-Training",
             config=CONFIG
         )
+        PATH = Path('.')
+        PATH_SAVE = PATH / f'checkpoints/{run.name}_{run.id}'
+        PATH_SAVE.mkdir(parents=True, exist_ok=True)
+
 
     # Denoiser and Scheduler
     score_unet = ScoreUNet(**MODEL_CONFIG).to(device)
@@ -142,8 +146,6 @@ def main():
 
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
-    checkpoint_dir = "checkpoints/gpu_attention_config_spatial_T2m_U10m_2000_2014"
-    os.makedirs(checkpoint_dir, exist_ok=True)
 
     start_epoch = 0
     for epoch in  (bar := trange(start_epoch, TRAIN_CONFIG["epochs"], ncols=88)):
@@ -166,7 +168,6 @@ def main():
             optimizer.step()
             losses_train.append(loss.detach())
 
-        # Reduce training loss across processes
         loss_train = torch.stack(losses_train).mean().item()
         loss_train_tensor = torch.tensor(loss_train, device=device)
         dist.all_reduce(loss_train_tensor, op=dist.ReduceOp.SUM)
@@ -197,8 +198,8 @@ def main():
 
             if epoch % 10 == 0:
                 checkpoint_path = os.path.join(
-                    checkpoint_dir,
-                    f"gpu_attention_config_spatial_T2m_U10m_2000_2014_{epoch}.pth"
+                    PATH_SAVE,
+                    f"model_{epoch}.pth"
                 )
                 torch.save({
                     'epoch': epoch,
@@ -206,6 +207,7 @@ def main():
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss_train': loss_train,
                     'loss_valid': loss_valid,
+                    'date_embedding_state_dict' : date_embedding.state_dict()
                 }, checkpoint_path)
                 print(f"Model saved at {checkpoint_path}")
 

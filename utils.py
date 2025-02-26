@@ -12,6 +12,17 @@ from typing import *
 from datetime import datetime
 from siren_pytorch import SirenNet
 
+from score import ScoreUNet, VPSDE
+
+ACTIVATIONS = {
+    'ReLU': torch.nn.ReLU,
+    'ELU': torch.nn.ELU,
+    'GELU': torch.nn.GELU,
+    'SELU': torch.nn.SELU,
+    'SiLU': torch.nn.SiLU,
+}
+
+
 # Adapted from https://github.com/francois-rozet/sda/blob/qg/sda/utils.py#L58
 class SequenceDataset(Dataset):
     def __init__(self,
@@ -131,3 +142,25 @@ def plot_sample(batch,info,mask, samples, step=4, unnormalize=True, path_unnorm 
     plt.tight_layout()
 
     return fig
+
+def constructEmbedding(date_embedding, dic):
+    return torch.concat((dic['context'], date_embedding(dic['frac_day_of_year'], dic['frac_hour_of_day']).unsqueeze(1)), dim=1)
+
+def load_setup(CONFIG, path_data : str, checkpoint_path: str, device):
+    setup = {}
+    PATH_DATA = Path(path_data)
+    with h5py.File(PATH_DATA / "mask.h5", "r") as f:
+        setup['mask'] = torch.tensor(f["dataset"][:], dtype=torch.float32, device=device).unsqueeze(0)
+        setup['mask_cpu'] = setup['mask'].detach().clone().cpu()
+    #setup['trainset'] = SequenceDataset(PATH_DATA / "train.h5", window=CONFIG['window'], flatten=True)
+    setup['validset'] = SequenceDataset(PATH_DATA / "test.h5", window=CONFIG['window'], flatten=True)
+    setup['validloader'] = DataLoader(setup['validset'], batch_size=CONFIG['batch_size'], shuffle=True, num_workers=1, persistent_workers=True)
+    score_unet = ScoreUNet(**CONFIG)
+    vpsde  = VPSDE(score_unet, shape=(CONFIG['channels'], CONFIG['y'], CONFIG['x']), eta=CONFIG['eta']).to(device)
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    new_state_dict = {key.replace("module.", ""): value for key, value in checkpoint['model_state_dict'].items()}
+    vpsde.load_state_dict(new_state_dict)
+    setup['vpsde'] = vpsde
+    print(f"Model restored from {checkpoint_path}, trained until epoch {checkpoint['epoch']}")
+
+    return setup

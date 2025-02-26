@@ -214,7 +214,8 @@ class UNet(torch.nn.Module):
             kernel_size=kernel_size,
             padding=[k // 2 for k in kernel_size],
         )
-
+        conv_keys = {'kernel_size', 'padding', 'stride', 'bias', 'dilation'}
+        conv_kwargs = {k: v for k, v in kwargs.items() if k in conv_keys}
         def block(channels):
             return ModResidualBlock(
                 project=torch.nn.Sequential(
@@ -224,9 +225,9 @@ class UNet(torch.nn.Module):
                 residue=torch.nn.Sequential(
                     # torch.nn.GroupNorm(num_groups=32, num_channels=channels),
                     LayerNorm(-(spatial + 1)),
-                    convolution(channels, channels, **kwargs),
+                    convolution(channels, channels, **conv_kwargs),
                     activation(),
-                    convolution(channels, channels, **kwargs),
+                    convolution(channels, channels, **conv_kwargs),
                 ),
             )
 
@@ -242,7 +243,7 @@ class UNet(torch.nn.Module):
                             hidden_channels[i - 1],
                             hidden_channels[i],
                             stride=stride,
-                            **kwargs,
+                            **conv_kwargs,
                         ),
                     )
                 )
@@ -257,13 +258,13 @@ class UNet(torch.nn.Module):
                         convolution(
                             hidden_channels[i],
                             hidden_channels[i - 1],
-                            **kwargs,
+                            **conv_kwargs,
                         ),
                     )
                 )
             else:
-                heads.append(convolution(in_channels, hidden_channels[i], **kwargs))
-                tails.append(convolution(hidden_channels[i], out_channels, **kwargs))
+                heads.append(convolution(in_channels, hidden_channels[i], **conv_kwargs))
+                tails.append(convolution(hidden_channels[i], out_channels, **conv_kwargs))
 
             descent_layers = []
             ascent_layers = []

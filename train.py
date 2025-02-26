@@ -42,8 +42,9 @@ validset = SequenceDataset(PATH_DATA / "test.h5", window=window, flatten=True)
 channels, y_dim, x_dim = trainset[0][0].shape #channels = (#var_keeps+1) * window
 # CONFIG
 TRAIN_CONFIG = {
+    "window" : 12,
     "epochs": 10000,
-    "batch_size": 16,
+    "batch_size": 48,
     "learning_rate": 2e-4,
     "weight_decay": 1e-4,
     "scheduler": "cosine",
@@ -54,9 +55,11 @@ TRAIN_CONFIG = {
 MODEL_CONFIG = { 'hidden_channels' : [64],
 'hidden_blocks' : [2],
 'spatial' : 2,
-'channels' : channels,
+'channels' : 24,
 'context' : 5,
-'embedding' : 64 }
+'embedding' : 64,
+'y' : 64,
+'x' : 64}
 CONFIG = {**TRAIN_CONFIG, **MODEL_CONFIG}
 run = wandb.init(
     project="Denoiser-Training",
