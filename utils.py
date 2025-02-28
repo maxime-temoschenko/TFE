@@ -61,7 +61,7 @@ class SequenceDataset(Dataset):
             return traj_x.flatten(0, 1), { 'context' : context, 'frac_day_of_year' : day_, 'frac_hour_of_day' : hour_}
 
         return traj_x, { 'context' : context, 'frac_day_of_year' : day_[i], 'frac_hour_of_day' : hour_[i]}
-        
+
 class BatchDataset(Dataset):
     def __init__(self, file: Path, data_keyword = 'samples'):
         super().__init__()
@@ -146,7 +146,7 @@ def plot_sample(batch,info,mask, samples, step=4, unnormalize=True, path_unnorm 
 def constructEmbedding(date_embedding, dic):
     return torch.concat((dic['context'], date_embedding(dic['frac_day_of_year'], dic['frac_hour_of_day']).unsqueeze(1)), dim=1)
 
-def load_setup(CONFIG, path_data : str, checkpoint_path: str, device):
+def load_setup(CONFIG, path_data : str, checkpoint_path: str, device, date_embedding = False, multi_gpu = True):
     setup = {}
     PATH_DATA = Path(path_data)
     with h5py.File(PATH_DATA / "mask.h5", "r") as f:
@@ -158,8 +158,20 @@ def load_setup(CONFIG, path_data : str, checkpoint_path: str, device):
     score_unet = ScoreUNet(**CONFIG)
     vpsde  = VPSDE(score_unet, shape=(CONFIG['channels'], CONFIG['y'], CONFIG['x']), eta=CONFIG['eta']).to(device)
     checkpoint = torch.load(checkpoint_path, map_location=device)
-    new_state_dict = {key.replace("module.", ""): value for key, value in checkpoint['model_state_dict'].items()}
+    if multi_gpu == True:
+        new_state_dict = {key.replace("module.", ""): value for key, value in checkpoint['model_state_dict'].items()}
+    else:
+        new_state_dict = checkpoint['model_state_dict']
     vpsde.load_state_dict(new_state_dict)
+    if date_embedding == True:
+        date_embedding = DateEmbedding()
+        if multi_gpu == True :
+            new_state_dict = {key.replace("module.", ""): value for key, value in checkpoint['date_embedding_state_dict'].items()}
+        else:
+            new_state_dict = checkpoint['date_embedding_state_dict']
+        date_embedding.load_state_dict(new_state_dict)
+        setup['date_embedding'] = date_embedding
+        print(f'Loaded Date Embedding')
     setup['vpsde'] = vpsde
     print(f"Model restored from {checkpoint_path}, trained until epoch {checkpoint['epoch']}")
 
