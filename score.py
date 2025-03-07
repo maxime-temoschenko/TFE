@@ -233,7 +233,7 @@ class VPSDE(nn.Module):
             self.alpha = lambda t: torch.exp(math.log(eta) * t**2)
         else:
             raise ValueError()
-
+        #log logit
         self.register_buffer('device', torch.empty(()))
 
     def mu(self, t: Tensor) -> Tensor:
@@ -283,6 +283,53 @@ class VPSDE(nn.Module):
                 x = (1 / torch.sqrt(alpha_t)) * (x - ((1 - alpha_t) / sqrt_one_minus_alpha_cumprod_t) * eps) + sigma_t * z
                 x = x*mask
         return x
+# TODO : Check ddim sampling
+    def ddim_sample(
+        self,
+        mask: Tensor,
+        shape: Size = (),
+        c: Tensor = None,
+        steps: int = 50,
+        eta: float = 0.0,
+        verbose: bool = True
+    ) -> Tensor:
+        x = torch.randn(shape + self.shape).to(x.device if 'x' in locals() else self.device)
+        x = x.reshape(-1, *self.shape) * mask
+        times = torch.linspace(1.0, 0.0, steps + 1).to(x.device)
+        iterator = tqdm(range(steps-1), desc="DDIM sampling", ncols=88) if verbose else range(steps-1)    
+        with torch.no_grad():
+            for i in iterator:
+                t = times[i]
+                t_prev = times[i + 1]
+                t_tensor = torch.full((x.shape[0],), t, device=x.device)
+                eps = self.eps(x, t_tensor, c) * mask             
+                alpha_t = self.mu(t) ** 2
+                alpha_prev = self.mu(t_prev) ** 2
+                pred_x0 = (x - self.sigma(t) * eps) / self.mu(t)               
+                # TODO : Check Numerical Stability
+                term1 = torch.clamp((1 - alpha_t) / (1 - alpha_prev + 1e-8), min=0.0)
+                term2 = torch.clamp(1 - alpha_prev / (alpha_t + 1e-8), min=0.0)
+                sigma_t = eta * self.sigma(t_prev) * torch.sqrt(term1) * torch.sqrt(term2)
+                pred_dir = torch.sqrt(1 - alpha_prev - sigma_t**2 + 1e-8) * eps
+                noise = torch.randn_like(x) if eta > 0 else 0
+                x = torch.sqrt(alpha_prev) * pred_x0 + pred_dir + sigma_t * noise
+                x = x * mask            
+            # Last Timestep
+            t = times[-2]  
+            t_prev = times[-1]  
+            t_tensor = torch.full((x.shape[0],), t, device=x.device)
+            eps = self.eps(x, t_tensor, c) * mask  
+            alpha_t = self.mu(t) ** 2
+            alpha_prev = self.mu(t_prev) ** 2
+            pred_x0 = (x - self.sigma(t) * eps) / self.mu(t)
+            term1 = torch.clamp((1 - alpha_t) / (1 - alpha_prev + 1e-8), min=0.0)
+            term2 = torch.clamp(1 - alpha_prev / (alpha_t + 1e-8), min=0.0)
+            sigma_t = eta * self.sigma(t_prev) * torch.sqrt(term1) * torch.sqrt(term2)
+            pred_dir = torch.sqrt(1 - alpha_prev - sigma_t**2 + 1e-8) * eps
+            noise = torch.randn_like(x) if eta > 0 else 0
+            x = torch.sqrt(alpha_prev) * pred_x0 + pred_dir + sigma_t * noise
+            x = x * mask
+        return x.reshape(shape + self.shape)
     def sample(
         self,
         mask: Tensor,
@@ -301,7 +348,6 @@ class VPSDE(nn.Module):
             corrections: The number of Langevin corrections per time steps.
             tau: The amplitude of Langevin steps.
         """
-        print('hello')
         x = torch.randn(shape + self.shape).to(self.device)
         x = x.reshape(-1, *self.shape)
 
