@@ -185,7 +185,8 @@ def unnormalize_ds(norm_data: np.array, var : str, normfile_path : str = "data/n
         raise ValueError("Invalid normalization method")
     return unnorm_data
 
-def resize_array(arr: np.array, size: int , value=np.nan):
+# TODO : Combine resize array and tensor
+def resize_array(arr: np.array, size: int, value=np.nan):
     # (*,y,x) -> (*, desired_shape, desired_shape) by cropping or padding with value
     *absorb, y_dim, x_dim = arr.shape
 
@@ -208,6 +209,27 @@ def resize_array(arr: np.array, size: int , value=np.nan):
                          constant_values=value)
     return resized_arr
 
+def resize_tensor(tensor: torch.Tensor, size: int, value=0.0):
+    device = tensor.device
+    *batch_dims, y_dim, x_dim = tensor.shape
+    if y_dim > size:
+        cut_y = (y_dim - size) // 2
+        tensor = tensor[..., cut_y:cut_y + size, :]
+    if x_dim > size:
+        cut_x = (x_dim - size) // 2
+        tensor = tensor[..., :, cut_x:cut_x + size]
+    *batch_dims, y_dim, x_dim = tensor.shape
+    pad_top = (size - y_dim) // 2
+    pad_bottom = (size - y_dim) - pad_top
+    pad_left = (size - x_dim) // 2
+    pad_right = (size - x_dim) - pad_left
+    resized_tensor = F.pad(
+        tensor, 
+        [pad_left, pad_right, pad_top, pad_bottom],
+        mode='constant', 
+        value=value
+    )
+    return resized_tensor
 
 def preprocess_xarray_to_numpy(dataset: xr.Dataset,
                                var_keeps: list[str] = ['RF', 'U10m', 'T2m'],
