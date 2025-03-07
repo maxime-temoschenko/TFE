@@ -85,6 +85,26 @@ def date_encoding(day : int, hour : int):
 
 
 class DateEmbedding(nn.Module):
+    def __init__(self, x: int = 64, y: int = 64, hidden_dim=256, num_layers=6, output_channels : int = 1, w0_initial=30, **kwargs):
+        super().__init__()
+        self.x = x
+        self.y = y
+        self.output_channels = output_channels
+        self.nn = SirenNet(dim_in=4, dim_hidden=hidden_dim, num_layers=num_layers, dim_out=x * y * self.output_channels,
+                            w0_initial=30)
+
+    def forward(self, frac_day, frac_hour):
+        day_sin, day_cos = torch.sin(2*torch.pi*frac_day), torch.cos(2*torch.pi*frac_day)
+        hour_sin, hour_cos = torch.sin(2*torch.pi*frac_hour), torch.cos(2*torch.pi*frac_hour)
+        input_nn = torch.stack((day_sin, day_cos, hour_sin, hour_cos), dim=1).float()
+        output = self.nn(input_nn)
+        output = output.view(-1, self.output_channels, self.y, self.x)
+        # TODO : make it properly
+        if self.x != 64 or self.y != 64:
+            output = resize_tensor(output, 64,  value=0.0)
+        return output 
+
+class RawDateEmbedding(nn.Module):
     def __init__(self, x: int = 64, y: int = 64, hidden_dim=256, num_layers=5, w0_initial=30, **kwargs):
         super().__init__()
         self.x = x
@@ -96,7 +116,6 @@ class DateEmbedding(nn.Module):
         input_nn = torch.stack((frac_day, frac_hour), dim=1).float()
         output = self.nn(input_nn)
         return output.view(-1, self.y, self.x)
-
 
 def plot_sample(batch,info,mask, samples, step=4, unnormalize=True, path_unnorm = 'data/norm_params.h5'):
     print(batch.shape)
@@ -144,9 +163,33 @@ def plot_sample(batch,info,mask, samples, step=4, unnormalize=True, path_unnorm 
     return fig
 
 def constructEmbedding(date_embedding, dic):
-    return torch.concat((dic['context'], date_embedding(dic['frac_day_of_year'], dic['frac_hour_of_day']).unsqueeze(1)), dim=1)
+    date_embedding.eval()
+    date_output = date_embedding(dic['frac_day_of_year'], dic['frac_hour_of_day'])
+    return torch.cat((dic['context'], date_output), dim=1)
 
-def load_setup(CONFIG, path_data : str, checkpoint_path: str, device, date_embedding = False, multi_gpu = True):
+def constructNaiveContext(dic, size=64):
+    device = dic['context'].device
+    day_frac = dic['frac_day_of_year']
+    hour_frac = dic['frac_hour_of_day']
+    if not isinstance(day_frac, torch.Tensor):
+        day_frac = torch.tensor(day_frac, device=device)
+    if not isinstance(hour_frac, torch.Tensor):
+        hour_frac = torch.tensor(hour_frac, device=device)
+    day_sin = torch.sin(2 * torch.pi * day_frac).view(-1, 1, 1)
+    day_cos = torch.cos(2 * torch.pi * day_frac).view(-1, 1, 1)
+    hour_sin = torch.sin(2 * torch.pi * hour_frac).view(-1, 1, 1)
+    hour_cos = torch.cos(2 * torch.pi * hour_frac).view(-1, 1, 1)
+    day_sin = day_sin.expand(-1, size, size)
+    day_cos = day_cos.expand(-1, size, size)
+    hour_sin = hour_sin.expand(-1, size, size)
+    hour_cos = hour_cos.expand(-1, size, size)
+    temporal_context = torch.stack([day_sin, day_cos, hour_sin, hour_cos], dim=1).float()
+    print("temporal : ", temporal_context.shape)
+    context = torch.cat((dic['context'], temporal_context), dim=1).float()
+    print(context.shape)
+    return context
+
+def load_setup(CONFIG, path_data : str, checkpoint_path: str, device, date_embedding = False, date_embedding_args={},multi_gpu = True):
     setup = {}
     PATH_DATA = Path(path_data)
     with h5py.File(PATH_DATA / "mask.h5", "r") as f:
@@ -156,7 +199,9 @@ def load_setup(CONFIG, path_data : str, checkpoint_path: str, device, date_embed
     setup['validset'] = SequenceDataset(PATH_DATA / "test.h5", window=CONFIG['window'], flatten=True)
     setup['validloader'] = DataLoader(setup['validset'], batch_size=CONFIG['batch_size'], shuffle=True, num_workers=1, persistent_workers=True)
     score_unet = ScoreUNet(**CONFIG)
+    score_unet.eval()
     vpsde  = VPSDE(score_unet, shape=(CONFIG['channels'], CONFIG['y'], CONFIG['x']), eta=CONFIG['eta']).to(device)
+    vpsde.eval()
     checkpoint = torch.load(checkpoint_path, map_location=device)
     if multi_gpu == True:
         new_state_dict = {key.replace("module.", ""): value for key, value in checkpoint['model_state_dict'].items()}
@@ -164,7 +209,8 @@ def load_setup(CONFIG, path_data : str, checkpoint_path: str, device, date_embed
         new_state_dict = checkpoint['model_state_dict']
     vpsde.load_state_dict(new_state_dict)
     if date_embedding == True:
-        date_embedding = DateEmbedding()
+        date_embedding = DateEmbedding(**date_embedding_args)
+        date_embedding.eval()
         if multi_gpu == True :
             new_state_dict = {key.replace("module.", ""): value for key, value in checkpoint['date_embedding_state_dict'].items()}
         else:
