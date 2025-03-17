@@ -274,6 +274,8 @@ def main(input_folder: str = 'data/',
          start_year_train: int = 2021,
          end_year_train: int = 2021,
          start_year_test : int = 2022,
+         start_year_validation : int = None,
+         end_year_validation : int = None,
          end_year_test : int = 2022,
          var_keeps: list[str] = ['T2m', 'U10m'],
          # preprocess
@@ -300,6 +302,10 @@ def main(input_folder: str = 'data/',
     print(f"Last 2D of batch_size will be : {size}")
     print(f"Normalization strategy for data: {normalization_mode}")
 
+    if start_year_validation is not None and end_year_validation is not None:
+        validation_process = True
+    else:
+        validation_process = False
     # Preprocessing pipeline
     print('[TRAIN PREPROCESSING]')
     # Train
@@ -313,11 +319,18 @@ def main(input_folder: str = 'data/',
     print('[\TEST PREPROCESSING]')
 
 
+
     # Save the files
     dataset = {'train': train_data_dict,
                'test': test_data_dict}
+    
+    if validation_preprocess == True:
+        print('[VALIDATION PREPROCESSING]')
+        validation_ds = load_xarray(input_folder=input_folder, start_year=start_year_validation, end_year=end_year_validation, var_keeps=var_keeps)
+        validation_data_dict = preprocess_xarray_to_numpy(validation_ds, var_keeps=var_keeps, size=size, normalization_mode=normalization_mode)
+        dataset['validation'] = validation_data_dict
+        print('[\VALIDATION PREPROCESSING]')
     print('[GENERATE]')
-
     for name, data_dict in dataset.items():
         with h5py.File(PATH / f'{name}.h5', mode='w') as f:
             f.create_dataset('data', data=data_dict['data'], dtype=np.float32)
