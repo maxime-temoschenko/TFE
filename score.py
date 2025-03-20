@@ -448,7 +448,7 @@ class DPSGaussianScore(nn.Module):
             eps = self.sde.eps(x, t,c)
             x_ = (x - sigma * eps) / mu
             x_ = x_ * self.mask
-            err = ( (self.y*self.mask) - (self.A(x_)*self.mask)).square().sum()
+            err = ( (self.y) - (self.A(x_))).square().sum()
 
         s, = torch.autograd.grad(err, x)
         s = -s * self.zeta / err.sqrt()
@@ -487,7 +487,7 @@ class GaussianScore(nn.Module):
 
     def forward(self, x: Tensor, t: Tensor, c: Tensor = None) -> Tensor:
         mu, sigma = self.sde.mu(t), self.sde.sigma(t)
-
+       
         if self.detach:
             eps = self.sde.eps(x, t, c)
 
@@ -499,11 +499,13 @@ class GaussianScore(nn.Module):
             mask = self.mask
             x_ = (x - sigma * eps) / mu
             x_ = x_ * mask
-            err = (self.y - self.A(x_))*mask
+            # err = (self.y - self.A(x_))*mask
+            err = (self.y - self.A(x_))
             var = self.std ** 2 + self.gamma * (sigma / mu) ** 2
-
+            
             log_p = -(err ** 2 / var).sum() / 2
-
+            # print(f"t : {t}, sigma : {sigma}, mu : {mu}, var = {var}, err ={err[0][0][25:30,25:30]}, log_p = {log_p}")
+            # print(x_[0][0][0][20:30,20:30])
         s, = torch.autograd.grad(log_p, x)
 
         return (eps*mask) - sigma * (s*mask)
