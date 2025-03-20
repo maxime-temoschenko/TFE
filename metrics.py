@@ -3,7 +3,8 @@ import numpy as np
 from skimage.metrics import structural_similarity as ssim
 from scipy.stats import wasserstein_distance
 from torch.nn.functional import mse_loss, l1_loss
-
+from pysteps.utils.spectral import rapsd
+from typing import *
 
 def calculate_rmse(prediction, target, mask=None, num_variables=2):
     """
@@ -13,8 +14,6 @@ def calculate_rmse(prediction, target, mask=None, num_variables=2):
         prediction: Tensor of shape [batch, window*channels, height, width] or [window*channels, height, width]
         target: Tensor with the same shape as prediction
         mask: Optional mask for valid data points   
-    Returns:
-        RMSE per channel and timestep, and overall RMSE
     """
     if mask is not None:
         prediction = prediction * mask
@@ -26,7 +25,6 @@ def calculate_rmse(prediction, target, mask=None, num_variables=2):
         
     batch_size, channels, height, width = prediction.shape
     
-   
     window = channels // num_variables
     
     # (Batch, window*num_variables, height, width) -> (Batch, window, num_variables, height, width)
@@ -34,36 +32,32 @@ def calculate_rmse(prediction, target, mask=None, num_variables=2):
     target_reshaped = target.reshape(batch_size, window, num_variables, height, width)
     
     # (Batch, num_variables, window, height, width)
-    print(prediction_reshaped.shape)
     prediction_reshaped = prediction_reshaped.permute(0, 2, 1, 3, 4)
     target_reshaped = target_reshaped.permute(0, 2, 1, 3, 4)
     
-
-    rmse_per_var_time = torch.zeros(num_variables, window)
+    
+    # Overall RMSE per variable (across all timesteps)
+    overall_rmse_per_var = torch.zeros(num_variables)
+    # Ensemble RMSE 
+    prediction_mean  = prediction_reshaped.mean(dim=0) # [num_variables, window, height, width]
+    ensemble_rmse_per_var = torch.zeros(num_variables)
     for v in range(num_variables):
-        for t in range(window):
-            if mask is not None:
-                valid_points = mask.sum()
-                if valid_points > 0:
-                    error = ((prediction_reshaped[:, v, t] - target_reshaped[:, v, t]) ** 2).sum() / valid_points
-                    rmse_per_var_time[v, t] = torch.sqrt(error)
-            else:
-                error = mse_loss(prediction_reshaped[:, v, t], target_reshaped[:, v, t])
-                rmse_per_var_time[v, t] = torch.sqrt(error)
-    
-    # Overall RMSE
-    if mask is not None:
-        valid_points = mask.sum() * batch_size * channels
-        if valid_points > 0:
-            overall_error = ((prediction - target) ** 2).sum() / valid_points
-            overall_rmse = torch.sqrt(overall_error)
+        if mask is not None:
+            valid_points = mask.sum() * batch_size * window
+            if valid_points > 0:
+                var_error = ((prediction_reshaped[:, v] - target_reshaped[:, v]) ** 2).sum() / valid_points
+                overall_rmse_per_var[v] = torch.sqrt(var_error)
+                ensemble_rmse_per_var[v] = torch.sqrt(((prediction_mean[v] - target_reshaped[0, v]) ** 2).sum() / (mask.sum() * window))
         else:
-            overall_rmse = torch.tensor(float('nan'))
-    else:
-        overall_error = mse_loss(prediction, target)
-        overall_rmse = torch.sqrt(overall_error)
+            var_error = mse_loss(prediction_reshaped[:, v].reshape(-1, height, width), 
+                              target_reshaped[:, v].reshape(-1, height, width))
+            overall_rmse_per_var[v] = torch.sqrt(var_error)
     
-    return rmse_per_var_time, overall_rmse
+    
+    return {
+        'per_variable': overall_rmse_per_var,
+        'ensemble_rmse': ensemble_rmse_per_var
+    }
 
 
 def calculate_mae(prediction, target, mask=None, num_variables=2):
@@ -76,7 +70,10 @@ def calculate_mae(prediction, target, mask=None, num_variables=2):
         mask: Optional mask for valid data points
         
     Returns:
-        MAE per channel and timestep, and overall MAE
+        Dictionary containing:
+         - per_var_time: MAE per variable and timestep
+         - overall: Overall MAE across all variables and timesteps
+         - per_variable: Overall MAE for each variable
     """
     if mask is not None:
         prediction = prediction * mask
@@ -98,9 +95,14 @@ def calculate_mae(prediction, target, mask=None, num_variables=2):
     prediction_reshaped = prediction_reshaped.permute(0, 2, 1, 3, 4)
     target_reshaped = target_reshaped.permute(0, 2, 1, 3, 4)
     
+    # MAE per variable and timestep
     mae_per_var_time = torch.zeros(num_variables, window)
     
+    # Overall MAE per variable (across all timesteps)
+    overall_mae_per_var = torch.zeros(num_variables)
+    
     for v in range(num_variables):
+        # Calculate MAE per timestep for this variable
         for t in range(window):
             if mask is not None:
                 valid_points = mask.sum()
@@ -110,7 +112,19 @@ def calculate_mae(prediction, target, mask=None, num_variables=2):
             else:
                 error = l1_loss(prediction_reshaped[:, v, t], target_reshaped[:, v, t])
                 mae_per_var_time[v, t] = error
+                
+        # Calculate overall MAE for this variable (across all timesteps)
+        if mask is not None:
+            valid_points = mask.sum() * batch_size * window
+            if valid_points > 0:
+                var_error = (prediction_reshaped[:, v] - target_reshaped[:, v]).abs().sum() / valid_points
+                overall_mae_per_var[v] = var_error
+        else:
+            var_error = l1_loss(prediction_reshaped[:, v].reshape(-1, height, width), 
+                             target_reshaped[:, v].reshape(-1, height, width))
+            overall_mae_per_var[v] = var_error
     
+    # Overall MAE across all variables and timesteps
     if mask is not None:
         valid_points = mask.sum() * batch_size * channels
         if valid_points > 0:
@@ -120,7 +134,11 @@ def calculate_mae(prediction, target, mask=None, num_variables=2):
     else:
         overall_error = l1_loss(prediction, target)
     
-    return mae_per_var_time, overall_error
+    return {
+        'per_var_time': mae_per_var_time,
+        'overall': overall_error,
+        'per_variable': overall_mae_per_var
+    }
 
 
 def calculate_ssim(prediction, target, mask=None):
@@ -133,7 +151,9 @@ def calculate_ssim(prediction, target, mask=None):
         mask: Optional mask for valid data points
         
     Returns:
-        SSIM per channel and timestep
+        Dictionary containing:
+         - per_var_time: SSIM per variable and timestep
+         - per_variable: Overall SSIM for each variable
     """
     # Convert to numpy for skimage
     if isinstance(prediction, torch.Tensor):
@@ -161,10 +181,18 @@ def calculate_ssim(prediction, target, mask=None):
     prediction_reshaped = np.transpose(prediction_reshaped, (0, 2, 1, 3, 4))
     target_reshaped = np.transpose(target_reshaped, (0, 2, 1, 3, 4))
     
+    # SSIM per variable and timestep
     ssim_per_var_time = np.zeros((num_variables, window))
     
+    # Overall SSIM per variable (across all timesteps)
+    overall_ssim_per_var = np.zeros(num_variables)
+    
     for v in range(num_variables):
+        # Calculate SSIM per timestep for this variable
+        timestep_ssim_values = []
+        
         for t in range(window):
+            timestep_ssim_sum = 0
             for b in range(batch_size):
                 pred_slice = prediction_reshaped[b, v, t]
                 target_slice = target_reshaped[b, v, t]
@@ -195,9 +223,20 @@ def calculate_ssim(prediction, target, mask=None):
                                          sigma=1.5, 
                                          use_sample_covariance=False)
                     
-                    ssim_per_var_time[v, t] += ssim_value / batch_size
+                    timestep_ssim_sum += ssim_value
+                    timestep_ssim_values.append(ssim_value)
+            
+            if batch_size > 0:
+                ssim_per_var_time[v, t] = timestep_ssim_sum / batch_size
+        
+        # Calculate overall SSIM for this variable (average across all timesteps)
+        if timestep_ssim_values:
+            overall_ssim_per_var[v] = np.mean(timestep_ssim_values)
     
-    return ssim_per_var_time
+    return {
+        'per_var_time': ssim_per_var_time,
+        'per_variable': overall_ssim_per_var
+    }
 
 
 def calculate_wasserstein(prediction, target, mask=None):
@@ -266,6 +305,48 @@ def calculate_wasserstein(prediction, target, mask=None):
     
     return wasserstein_per_var_time
 
+def compute_rapsd(data: Union[np.ndarray, torch.Tensor], 
+                             resolution_km: float,
+                             channel_names: List[str] = ["Temperature", "Wind Speed"]):
+    """
+    Compute RAPSD for your specific data format [BATCH, 24, 64, 64] where 
+    channels and timesteps are interleaved (12 timesteps * 2 channels = 24).
+    
+    Parameters:
+    -----------
+    data : np.ndarray or torch.Tensor
+        Shape should be (batch_size, 24, 64, 64) where 24 = 12 timesteps * 2 channels
+    resolution_km : float
+        Spatial resolution in kilometers per grid cell
+    channel_names : List[str]
+        Names of channels for plotting
+    
+    Returns:
+    --------
+    wavelengths : np.ndarray
+        Wavelengths in kilometers
+    rapsd_values : List[np.ndarray]
+        RAPSD values for each channel, averaged over timesteps and batches
+    """
+    if isinstance(data, torch.Tensor):
+        data = data.detach().cpu().numpy()
+    batch_size, total_steps, height, width = data.shape
+    n_channels = 2
+    timesteps = total_steps // n_channels
+    channel_rapsds = [[[[] for _ in range(timesteps)] for _ in range(n_channels)] for _ in range(batch_size)]
+    for b in range(batch_size):
+        for t in range(timesteps):
+            for c in range(n_channels):
+                idx = t * n_channels + c
+                field = data[b, idx]
+                spectrum, radii = rapsd(field, fft_method=np.fft, return_freq=True)
+                channel_rapsds[b][c][t].append(spectrum)  
+    channel_rapsds = np.array(channel_rapsds)  # (batch_size, n_channels, timesteps, spectrum_length)
+
+    avg_rapsd_batch = np.mean(channel_rapsds, axis=(2))  # Shape: (n_channels, spectrum_length)
+
+    wavelengths = resolution_km * (2.0 * np.pi) / radii  # Use `radii`, which is fixed
+    return wavelengths, radii,  avg_rapsd_batch, channel_rapsds
 
 def calculate_anomaly_correlation(prediction, target, mask=None, climatology=None):
     """
@@ -427,198 +508,36 @@ def calculate_energy_score(predictions, target, mask=None):
     
     return energy_score
 
-def calculate_sample_variance(predictions, target, mask=None, num_variables=2):
-    """
-    Calculate variance and dispersion statistics of ensemble predictions with respect to ground truth.
-    The batch dimension represents different ensemble members.
-    
-    Args:
-        predictions: Tensor with shape [batch/ensemble, window*channels, height, width]
-                    where batch dimension represents different ensemble members
-        target: Ground truth tensor with shape [window*channels, height, width] or
-                [1, window*channels, height, width]
-        mask: Optional mask for valid data points
-        num_variables: Number of variables in the data (default: 2)
-        
-    Returns:
-        Dictionary containing variance statistics:
-            - sample_variance: Variance across samples for each variable and timestep
-            - mean_deviation: Mean absolute deviation from ground truth
-            - ensemble_mean_rmse: Error of the ensemble mean prediction vs ground truth
-            - spread_skill_ratio: Ratio of ensemble spread to error (ideal value is 1.0)
-            - global_var_per_var: Global variance across all timesteps for each variable 
-            - global_var_all: Global variance across all variables and timesteps
-    """
-    # Convert to numpy arrays if they are torch tensors
-    if isinstance(predictions, torch.Tensor):
-        predictions_np = predictions.detach().cpu().numpy()
-    else:
-        predictions_np = predictions
-        
-    if isinstance(target, torch.Tensor):
-        target_np = target.detach().cpu().numpy()
-    else:
-        target_np = target
-        
-    if mask is not None and isinstance(mask, torch.Tensor):
-        mask_np = mask.detach().cpu().numpy()
-    else:
-        mask_np = mask
-    
-    # Ensure target has batch dimension (of size 1)
-    if target_np.ndim == 3:
-        target_np = np.expand_dims(target_np, axis=0)
-    
-    # Get dimensions
-    n_samples, channels, height, width = predictions_np.shape
+def calculate_sample_variance(prediction,  mask=None, num_variables=2):
+    if mask is not None:
+        prediction = prediction * mask 
+    print('hello')
+
+    batch_size, channels, height, width = prediction.shape
+
     window = channels // num_variables
     
-    # Reshape predictions and target to [batch/ensemble, var, time, height, width]
-    pred_reshaped = predictions_np.reshape(n_samples, window, num_variables, height, width)
-    pred_reshaped = np.transpose(pred_reshaped, (0, 2, 1, 3, 4))
+    # [batch, window*channels, height, width] -> [batch, window, num_variables, height, width]
+    prediction_reshaped = prediction.reshape(batch_size, window, num_variables, height, width)
+   
+    # [batch, num_variables, window, height, width]
+    prediction_reshaped = prediction_reshaped.permute(0, 2, 1, 3, 4)
     
-    target_reshaped = target_np.reshape(target_np.shape[0], window, num_variables, height, width)
-    target_reshaped = np.transpose(target_reshaped, (0, 2, 1, 3, 4))
-    
-    # Calculate ensemble mean
-    ensemble_mean = np.mean(pred_reshaped, axis=0, keepdims=True)  # [1, var, time, height, width]
-    
-    # Initialize arrays for results
-    sample_variance = np.zeros((num_variables, window))
-    mean_deviation = np.zeros((num_variables, window))
-    ensemble_mean_rmse = np.zeros((num_variables, window))
-    spread_skill_ratio = np.zeros((num_variables, window))
-    
-    # Calculate statistics for each variable and timestep
-    for v in range(num_variables):
-        for t in range(window):
-            # Extract all sample predictions and ground truth
-            sample_preds = pred_reshaped[:, v, t]  # [n_samples, height, width]
-            gt = target_reshaped[0, v, t]  # [height, width]
-            
-            # Apply mask if provided
-            if mask_np is not None:
-                mask_slice = mask_np if mask_np.ndim == 2 else mask_np.squeeze()
-                valid_mask = mask_slice > 0
-                
-                if valid_mask.sum() > 0:
-                    # Apply mask to each sample and ground truth
-                    sample_values = np.array([sample[valid_mask] for sample in sample_preds])
-                    gt_values = gt[valid_mask]
-                    
-                    # Calculate variance across samples
-                    sample_variance[v, t] = np.var(sample_values, axis=0).mean()
-                    
-                    # Calculate mean absolute deviation from ground truth
-                    mean_deviation[v, t] = np.mean(np.abs(sample_values - gt_values))
-                    
-                    # Get ensemble mean RMSE
-                    ens_mean_values = ensemble_mean[0, v, t][valid_mask]
-                    ensemble_mean_rmse[v, t] = np.sqrt(np.mean((ens_mean_values - gt_values) ** 2))
-            else:
-                # Flatten spatial dimensions
-                sample_values = sample_preds.reshape(n_samples, -1)
-                gt_values = gt.flatten()
-                
-                # Remove NaN values
-                valid_indices = ~np.isnan(gt_values)
-                for i in range(n_samples):
-                    valid_indices = valid_indices & ~np.isnan(sample_values[i])
-                
-                if np.any(valid_indices):
-                    sample_values = sample_values[:, valid_indices]
-                    gt_values = gt_values[valid_indices]
-                    
-                    sample_variance[v, t] = np.var(sample_values, axis=0).mean()
-                    mean_deviation[v, t] = np.mean(np.abs(sample_values - gt_values))
-                    
-                    ens_mean_values = ensemble_mean[0, v, t].flatten()[valid_indices]
-                    ensemble_mean_rmse[v, t] = np.sqrt(np.mean((ens_mean_values - gt_values) ** 2))
-            
-            # Calculate spread-skill ratio
-            if ensemble_mean_rmse[v, t] > 0:
-                ensemble_spread = np.sqrt(sample_variance[v, t])
-                spread_skill_ratio[v, t] = ensemble_spread / ensemble_mean_rmse[v, t]
-    
-    # Calculate global variance per variable (across all timesteps)
-    global_var_per_var = np.zeros(num_variables)
-    
-    # Calculate global variance across all variables and timesteps
-    all_samples_all_vars = []
-    all_gt_all_vars = []
-    
-    for v in range(num_variables):
-        all_samples_var = []
-        all_gt_var = []
-        
-        for t in range(window):
-            if mask_np is not None:
-                mask_slice = mask_np if mask_np.ndim == 2 else mask_np.squeeze()
-                valid_mask = mask_slice > 0
-                
-                if valid_mask.sum() > 0:
-                    for s in range(n_samples):
-                        # Get values for this sample, variable, timestep at valid locations
-                        sample_values = pred_reshaped[s, v, t][valid_mask]
-                        
-                        # Remove NaN values
-                        valid_indices = ~np.isnan(sample_values)
-                        if np.any(valid_indices):
-                            all_samples_var.extend(sample_values[valid_indices])
-                            
-                            if len(all_samples_all_vars) <= s:
-                                all_samples_all_vars.append([])
-                            all_samples_all_vars[s].extend(sample_values[valid_indices])
-                    
-                    # Get ground truth values for this variable, timestep at valid locations
-                    gt_values = target_reshaped[0, v, t][valid_mask]
-                    valid_indices = ~np.isnan(gt_values)
-                    if np.any(valid_indices):
-                        all_gt_var.extend(gt_values[valid_indices])
-                        all_gt_all_vars.extend(gt_values[valid_indices])
-            else:
-                for s in range(n_samples):
-                    # Flatten and get values for this sample, variable, timestep
-                    sample_values = pred_reshaped[s, v, t].flatten()
-                    
-                    # Remove NaN values
-                    valid_indices = ~np.isnan(sample_values)
-                    if np.any(valid_indices):
-                        all_samples_var.extend(sample_values[valid_indices])
-                        
-                        if len(all_samples_all_vars) <= s:
-                            all_samples_all_vars.append([])
-                        all_samples_all_vars[s].extend(sample_values[valid_indices])
-                
-                # Get ground truth values for this variable, timestep
-                gt_values = target_reshaped[0, v, t].flatten()
-                valid_indices = ~np.isnan(gt_values)
-                if np.any(valid_indices):
-                    all_gt_var.extend(gt_values[valid_indices])
-                    all_gt_all_vars.extend(gt_values[valid_indices])
-        
-        # Calculate global variance for this variable
-        if all_samples_var:
-            # Reshape to [n_samples, n_points]
-            all_samples_var_array = np.array([all_samples_var]).reshape(n_samples, -1)
-            global_var_per_var[v] = np.var(all_samples_var_array, axis=0).mean()
-    
-    # Calculate global variance across all variables and timesteps
-    global_var_all = 0
-    if all_samples_all_vars:
-        # Make sure each sample has the same length
-        min_length = min(len(arr) for arr in all_samples_all_vars)
-        all_samples_all_vars_array = np.array([arr[:min_length] for arr in all_samples_all_vars])
-        global_var_all = np.var(all_samples_all_vars_array, axis=0).mean()
-    
-    return {
-        'sample_variance': sample_variance,                 # variance per variable and timestep
-        'mean_deviation': mean_deviation,                   # mean abs deviation from ground truth
-        'ensemble_mean_rmse': ensemble_mean_rmse,           # RMSE of ensemble mean vs ground truth
-        'spread_skill_ratio': spread_skill_ratio,           # ratio of ensemble spread to error
-        'global_var_per_var': global_var_per_var,           # global variance per variable (across all timesteps)
-        'global_var_all': global_var_all                    # global variance across all vars and timesteps
-    }
+    # Variance and RMSEs metrics
+    prediction_mean  = prediction_reshaped.mean(dim=0) # [num_variables, window, height, width]
+    print(prediction_mean.shape)
+    variance_sample = torch.zeros((batch_size, num_variables,window, height, width))
+    variance_per_variable = torch.zeros((num_variables))
+    for i  in range(batch_size):
+        for var in range(num_variables):
+            variance_sample[i, var] = (prediction_reshaped[i,var] - prediction_mean[var]).pow(2)
+    valid_points = mask.sum() * batch_size * window
+    if valid_points > 0:
+        for v in range(num_variables):
+            variance_per_variable[v] = variance_sample[:, v].sum() / valid_points
+
+    return variance_per_variable
+
 
 
 def calculate_metrics(predictions, target, mask=None, var_names=None, metric_names=None):
