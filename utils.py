@@ -116,52 +116,103 @@ class RawDateEmbedding(nn.Module):
         input_nn = torch.stack((frac_day, frac_hour), dim=1).float()
         output = self.nn(input_nn)
         return output.view(-1, self.y, self.x)
+def clip_outliers(tensor, n_std=3):
+    mean = np.nanmean(tensor)
+    std = np.nanstd(tensor)
+    return torch.clamp(tensor, min=mean-n_std*std, max=mean+n_std*std)
 
-def plot_sample(batch,info,mask, samples, step=4, unnormalize=True, path_unnorm = 'data/norm_params.h5'):
-    print(batch.shape)
-    B, Z, Y , X = batch.shape
-    redim_batch = batch.view(B, info['window'], info['channels'], Y,X).permute(0, 2, 1, 3, 4)
+def plot_sample(batch, info, mask, samples, step=4, unnormalize=True, path_unnorm='data/norm_params.h5', 
+                lat_lon_path='data/lat_lon.h5', show_borders=True):
+    B, Z, Y, X = batch.shape
+    redim_batch = batch.view(B, info['window'], info['channels'], Y, X).permute(0, 2, 1, 3, 4) 
     if unnormalize == True:
         for i in range(info['channels']):
-            redim_batch[:,i, ...] = unnormalize_ds(redim_batch[:,i, ...], info['var_index'][i], normfile_path=path_unnorm ,normalization_mode='zscore')
-    traj= torch.where(mask.unsqueeze(0).unsqueeze(0).bool(), redim_batch, torch.tensor(float('nan'), dtype=redim_batch.dtype))
+            redim_batch[:,i, ...] = unnormalize_ds(redim_batch[:,i, ...], info['var_index'][i], 
+                                                 normfile_path=path_unnorm, normalization_mode='zscore')
+    
+    traj = torch.where(mask.unsqueeze(0).unsqueeze(0).bool(), redim_batch, 
+                      torch.tensor(float('nan'), dtype=redim_batch.dtype))
     data = traj
     s, variables, timesteps, y_dim, x_dim = data.shape
     selected_timesteps = range(0, timesteps, step)
-    fig, axes = plt.subplots(nrows=info['channels'] * samples, ncols=len(selected_timesteps), figsize=(15, 5 * samples))
+    
+    use_cartopy = show_borders and lat_lon_path is not None
+    if use_cartopy:
+        try:
+            import cartopy.crs as ccrs
+            import cartopy.feature as cfeature
+            
+            with h5py.File(lat_lon_path, 'r') as f:
+                lat_grid = f['LAT_INTERP'][:]
+                lon_grid = f['LON_INTERP'][:]
+                
+            print(f"Loaded lat/lon grid with shape: {lat_grid.shape}")
+            
+        except Exception as e:
+            print(f"Failed to load lat/lon data: {e}")
+            use_cartopy = False
+
+    fig, axes = plt.subplots(nrows=info['channels'] * samples, ncols=len(selected_timesteps), 
+                            figsize=(15, 5 * samples), 
+                            subplot_kw={'projection': ccrs.PlateCarree()} if use_cartopy else None)
+    
+    if len(selected_timesteps) == 1:
+        axes = np.atleast_2d(axes).T
+    
     cbar_axes = []
-    for s in range(samples):
+    
+    for s_idx in range(samples):
         for var in range(variables):
-            mean, std =  np.nanmean(data[s,var,:]), np.nanstd(data[s,var,:])
+            mean, std = np.nanmean(data[s_idx, var, :]), np.nanstd(data[s_idx, var, :])
             print(f"{info['var_index'][var]}  Mean : {mean}, Var: {std}")
+            
             for i, t in enumerate(selected_timesteps):
-                vmin, vmax = np.nanmin(data[s, var, t]), np.nanmax(data[s, var, t])
-                ax = axes[info['channels'] * s + var, i]  # Correct row indexing
-                img_data = data[s, var,t].numpy()
+                ax = axes[info['channels'] * s_idx + var, i]
+                data[s_idx, var, t] = clip_outliers(data[s_idx, var, t])
+                img_data = data[s_idx, var, t].numpy()
+
                 img_data = np.ma.masked_invalid(img_data)
+                
                 cmap = plt.get_cmap('viridis' if var == 0 else 'plasma')
                 cmap.set_bad(color='black')
-                img = ax.imshow(img_data, cmap=cmap, aspect='auto', vmin=vmin, vmax=vmax)
+                
+                vmin, vmax = np.nanmin(img_data), np.nanmax(img_data)
+                
+                if use_cartopy:
+                    img = ax.pcolormesh(lon_grid, lat_grid, np.flipud(img_data), 
+                                       cmap=cmap, vmin=vmin, vmax=vmax, 
+                                       transform=ccrs.PlateCarree())
+                    ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+                    ax.coastlines(linewidth=0.5)
+                    ax.set_extent([lon_grid.min(), lon_grid.max(), 
+                                  lat_grid.min(), lat_grid.max()], 
+                                 crs=ccrs.PlateCarree())
+                    ax.gridlines(draw_labels=False, alpha=0.0)
+                else:
+                    img = ax.imshow(img_data, cmap=cmap, aspect='auto', vmin=vmin, vmax=vmax)
+                
                 ax.set_xticks([])
                 ax.set_yticks([])
+                
                 if t == 0:
                     list_var = ["Temperature[°C]", "Wind Speed[M/S]"]
                     ax.set_ylabel(f'{list_var[var]}')
                 if var == 0:
                     ax.set_title(f"{t} Hours")
+                
                 cbar_axes.append(fig.colorbar(img, ax=ax))
 
-    for s in range(samples):
+    for s_idx in range(samples):
         fig.text(
-            -0.05, 1 - (2 * s + 1) / (2 * samples),
-            f"Sample {s}",
+            -0.05, 1 - (2 * s_idx + 1) / (2 * samples),
+            f"Sample {s_idx}",
             va='center', ha='center', rotation=90, fontsize=12, fontweight='bold'
         )
+        
     fig.suptitle("Visualization of samples", fontsize=16, fontweight="bold")
     plt.tight_layout()
 
     return fig
-
 def constructEmbedding(date_embedding, dic):
     date_embedding.eval()
     date_output = date_embedding(dic['frac_day_of_year'], dic['frac_hour_of_day'])
